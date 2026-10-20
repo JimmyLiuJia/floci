@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 
 import static io.github.hectorvent.floci.testing.EmrRequests.emr;
 import static org.hamcrest.Matchers.equalTo;
+import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.notNullValue;
 import static org.hamcrest.Matchers.nullValue;
 
@@ -80,5 +81,51 @@ class EmrTransientIntegrationTest {
                 .body("Cluster.AutoTerminate", equalTo(true))
                 .body("Cluster.Status.State", equalTo("WAITING"))
                 .body("Cluster.Status.Timeline.EndDateTime", nullValue());
+    }
+
+    @Test
+    void addingStepsAfterUserTerminationPreservesReasonAndEndTime() {
+        String clusterId = emr("RunJobFlow", "{\"Name\":\"manually-ended-transient\",\"Instances\":{}}")
+                .then().statusCode(200).extract().path("JobFlowId");
+        String clusterRequest = "{\"ClusterId\":\"" + clusterId + "\"}";
+        emr("TerminateJobFlows", "{\"JobFlowIds\":[\"" + clusterId + "\"]}")
+                .then().statusCode(200);
+        Object endTime = emr("DescribeCluster", clusterRequest).then().statusCode(200)
+                .body("Cluster.Status.StateChangeReason.Code", equalTo("USER_REQUEST"))
+                .extract().path("Cluster.Status.Timeline.EndDateTime");
+
+        emr("AddJobFlowSteps",
+                "{\"JobFlowId\":\"" + clusterId + "\",\"Steps\":[{\"Name\":\"late\","
+                        + "\"HadoopJarStep\":{\"Jar\":\"command-runner.jar\"}}]}")
+                .then().statusCode(200);
+        emr("ListSteps", clusterRequest).then().statusCode(200).body("Steps", hasSize(1));
+        emr("DescribeCluster", clusterRequest).then().statusCode(200)
+                .body("Cluster.Status.State", equalTo("TERMINATED"))
+                .body("Cluster.Status.StateChangeReason.Code", equalTo("USER_REQUEST"))
+                .body("Cluster.Status.Timeline.EndDateTime", equalTo(endTime));
+    }
+
+    @Test
+    void protectedCompletedClusterIsSkippedDuringMixedTermination() {
+        String completedId = emr("RunJobFlow",
+                "{\"Name\":\"protected-completed\",\"Instances\":{\"TerminationProtected\":true},"
+                        + "\"Steps\":[{\"Name\":\"initial\",\"HadoopJarStep\":{\"Jar\":\"command-runner.jar\"}}]}")
+                .then().statusCode(200).extract().path("JobFlowId");
+        String activeId = emr("RunJobFlow",
+                "{\"Name\":\"active\",\"Instances\":{\"KeepJobFlowAliveWhenNoSteps\":true}}")
+                .then().statusCode(200).extract().path("JobFlowId");
+        String completedRequest = "{\"ClusterId\":\"" + completedId + "\"}";
+        Object endTime = emr("DescribeCluster", completedRequest).then().statusCode(200)
+                .extract().path("Cluster.Status.Timeline.EndDateTime");
+
+        emr("TerminateJobFlows", "{\"JobFlowIds\":[\"" + completedId + "\",\"" + activeId + "\"]}")
+                .then().statusCode(200);
+        emr("DescribeCluster", completedRequest).then().statusCode(200)
+                .body("Cluster.Status.State", equalTo("TERMINATED"))
+                .body("Cluster.Status.StateChangeReason.Code", equalTo("ALL_STEPS_COMPLETED"))
+                .body("Cluster.Status.Timeline.EndDateTime", equalTo(endTime));
+        emr("DescribeCluster", "{\"ClusterId\":\"" + activeId + "\"}").then().statusCode(200)
+                .body("Cluster.Status.State", equalTo("TERMINATED"))
+                .body("Cluster.Status.StateChangeReason.Code", equalTo("USER_REQUEST"));
     }
 }

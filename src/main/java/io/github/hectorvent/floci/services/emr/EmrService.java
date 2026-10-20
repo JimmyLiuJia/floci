@@ -149,11 +149,11 @@ public class EmrService {
             if (cluster == null) {
                 continue;
             }
-            if (cluster.isTerminationProtected()) {
-                anyProtected = true;
+            if ("TERMINATED".equals(cluster.getState())) {
                 continue;
             }
-            if ("TERMINATED".equals(cluster.getState())) {
+            if (cluster.isTerminationProtected()) {
+                anyProtected = true;
                 continue;
             }
             cluster.setState("TERMINATED");
@@ -786,7 +786,8 @@ public class EmrService {
     }
 
     private void terminateAfterCompletedSteps(EmrCluster cluster) {
-        if (cluster.getSteps().isEmpty() || !cluster.isAutoTerminate()) {
+        if (cluster.getSteps().isEmpty() || !cluster.isAutoTerminate()
+                || "TERMINATED".equals(cluster.getState())) {
             return;
         }
         cluster.setState("TERMINATED");
