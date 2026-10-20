@@ -298,6 +298,7 @@ public class EmrServerlessService {
         }
         return storage.get(matcher.group(1))
                 .filter(app -> arn.equals(app.getArn()))
+                .filter(app -> !"TERMINATED".equals(app.getState()))
                 .orElseThrow(() -> new AwsException("ResourceNotFoundException", "Resource " + arn + " not found", 404));
     }
 
