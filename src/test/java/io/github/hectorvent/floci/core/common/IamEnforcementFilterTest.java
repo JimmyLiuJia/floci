@@ -1219,6 +1219,88 @@ class IamEnforcementFilterTest {
     }
 
     @Test
+    void getSessionTokenBypassesExplicitPolicyDeny() {
+        ContainerRequestContext containerRequest = mock(ContainerRequestContext.class);
+        String auth = "AWS4-HMAC-SHA256 Credential=AKIAUSERKEY/20261020/us-east-1/sts/aws4_request, "
+                + "SignedHeaders=host, Signature=abc";
+        requestContext.setAccountId("000000000000");
+        when(accountResolver.extractAccessKeyId(auth)).thenReturn("AKIAUSERKEY");
+        when(containerRequest.getHeaderString("Authorization")).thenReturn(auth);
+        when(actionRegistry.resolve("sts", containerRequest)).thenReturn("sts:GetSessionToken");
+        when(iamService.resolveCallerContext(eq("AKIAUSERKEY"), any())).thenReturn(CallerContext.of(List.of("""
+                {"Version":"2012-10-17","Statement":[
+                  {"Effect":"Deny","Action":"sts:GetSessionToken","Resource":"*"}]}""")));
+        when(evaluator.evaluateResolvedResourcePolicy(any(), any(), any(),
+                eq("sts:GetSessionToken"), any(), any())).thenReturn(IamPolicyEvaluator.Decision.DENY);
+
+        newFilter().filter(containerRequest);
+
+        verify(iamService).resolveCallerContext(eq("AKIAUSERKEY"), any());
+        verifyNoInteractions(evaluator);
+        verify(containerRequest, never()).abortWith(any());
+    }
+
+    @Test
+    void getSessionTokenBypassesMissingPolicyAllow() {
+        ContainerRequestContext containerRequest = mock(ContainerRequestContext.class);
+        String auth = "AWS4-HMAC-SHA256 Credential=AKIAUSERKEY/20261020/us-east-1/sts/aws4_request, "
+                + "SignedHeaders=host, Signature=abc";
+        requestContext.setAccountId("000000000000");
+        when(accountResolver.extractAccessKeyId(auth)).thenReturn("AKIAUSERKEY");
+        when(containerRequest.getHeaderString("Authorization")).thenReturn(auth);
+        when(actionRegistry.resolve("sts", containerRequest)).thenReturn("sts:GetSessionToken");
+        when(iamService.resolveCallerContext(eq("AKIAUSERKEY"), any())).thenReturn(CallerContext.of(List.of()));
+        when(evaluator.evaluateResolvedResourcePolicy(any(), any(), any(),
+                eq("sts:GetSessionToken"), any(), any())).thenReturn(IamPolicyEvaluator.Decision.DENY);
+
+        newFilter().filter(containerRequest);
+
+        verify(iamService).resolveCallerContext(eq("AKIAUSERKEY"), any());
+        verifyNoInteractions(evaluator);
+        verify(containerRequest, never()).abortWith(any());
+    }
+
+    @Test
+    void getSessionTokenRejectsUnknownAccessKey() {
+        ContainerRequestContext containerRequest = mock(ContainerRequestContext.class);
+        String auth = "AWS4-HMAC-SHA256 Credential=AKIADOESNOTEXIST0000/20261020/us-east-1/sts/aws4_request, "
+                + "SignedHeaders=host, Signature=abc";
+        requestContext.setAccountId("000000000000");
+        when(accountResolver.extractAccessKeyId(auth)).thenReturn("AKIADOESNOTEXIST0000");
+        when(containerRequest.getHeaderString("Authorization")).thenReturn(auth);
+        when(containerRequest.getMediaType()).thenReturn(MediaType.APPLICATION_FORM_URLENCODED_TYPE);
+        when(actionRegistry.resolve("sts", containerRequest)).thenReturn("sts:GetSessionToken");
+
+        newFilter().filter(containerRequest);
+
+        ArgumentCaptor<Response> response = ArgumentCaptor.captor();
+        verify(containerRequest).abortWith(response.capture());
+        assertEquals(403, response.getValue().getStatus());
+        assertTrue(entityString(response.getValue()).contains("InvalidClientTokenId"));
+        verifyNoInteractions(evaluator);
+    }
+
+    @Test
+    void otherStsActionsStillRequirePolicyPermission() {
+        ContainerRequestContext containerRequest = mock(ContainerRequestContext.class);
+        String auth = "AWS4-HMAC-SHA256 Credential=AKIAUSERKEY/20261020/us-east-1/sts/aws4_request, "
+                + "SignedHeaders=host, Signature=abc";
+        requestContext.setAccountId("000000000000");
+        when(accountResolver.extractAccessKeyId(auth)).thenReturn("AKIAUSERKEY");
+        when(containerRequest.getHeaderString("Authorization")).thenReturn(auth);
+        when(actionRegistry.resolve("sts", containerRequest)).thenReturn("sts:AssumeRole");
+        when(iamService.resolveCallerContext(eq("AKIAUSERKEY"), any())).thenReturn(CallerContext.of(List.of()));
+        when(evaluator.evaluateResolvedResourcePolicy(any(), any(), any(),
+                eq("sts:AssumeRole"), any(), any())).thenReturn(IamPolicyEvaluator.Decision.DENY);
+
+        newFilter().filter(containerRequest);
+
+        verify(evaluator).evaluateResolvedResourcePolicy(any(), any(), any(),
+                eq("sts:AssumeRole"), any(), any());
+        verify(containerRequest).abortWith(any(Response.class));
+    }
+
+    @Test
     void filterPassesEc2ResourceTagConditionContextAndHonoursTheDeny() {
         ContainerRequestContext containerRequest = mock(ContainerRequestContext.class);
         Map<String, List<String>> conditions = Map.of("aws:ResourceTag/Team", List.of("engineering"));

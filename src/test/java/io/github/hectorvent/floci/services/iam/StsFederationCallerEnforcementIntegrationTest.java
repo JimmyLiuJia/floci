@@ -90,6 +90,26 @@ class StsFederationCallerEnforcementIntegrationTest {
         }
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void getSessionTokenDoesNotRequirePolicyPermission(boolean explicitDeny) throws Exception {
+        String name = "session-no-permission-" + UUID.randomUUID();
+        iam.createUser(name, "/");
+        cleanup.register(() -> iam.deleteUser(name));
+        AccessKey key = iam.createAccessKey(name);
+        cleanup.register(() -> iam.deleteAccessKey(name, key.getAccessKeyId()));
+        if (explicitDeny) {
+            iam.putUserPolicy(name, "deny-session", """
+                    {"Version":"2012-10-17","Statement":[
+                      {"Effect":"Deny","Action":"sts:GetSessionToken","Resource":"*"}]}""");
+            cleanup.register(() -> iam.deleteUserPolicy(name, "deny-session"));
+        }
+
+        Credentials caller = new Credentials(key.getAccessKeyId(), key.getSecretAccessKey(), null);
+        Credentials session = remember(request(caller, "GetSessionToken", Map.of()), "GetSessionToken");
+        request(session, "GetCallerIdentity", Map.of()).then().statusCode(200);
+    }
+
     @Test
     void federationSessionKeepsOtherIamAndStsRestrictions() throws Exception {
         Credentials issued = issue("GetFederationToken");
