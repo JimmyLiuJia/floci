@@ -509,6 +509,10 @@ public class CodeBuildRunner implements ContainerTeardown {
     // Copies files from the local workspace into the container's working directory.
     // Skips silently when the workspace is empty (e.g. NO_SOURCE builds).
     void copySourceToContainer(String containerId, Path sourceDir, String remotePath) {
+        copySourceToContainer(containerId, sourceDir, remotePath, RetryingTarCopier.DEFAULT_BACKOFF_MS);
+    }
+
+    void copySourceToContainer(String containerId, Path sourceDir, String remotePath, long backoffMillis) {
         if (!Files.exists(sourceDir)) return;
         try (Stream<Path> ls = Files.list(sourceDir)) {
             if (ls.findAny().isEmpty()) return;
@@ -517,7 +521,8 @@ public class CodeBuildRunner implements ContainerTeardown {
         }
 
         RetryingTarCopier.copyStreamed(dockerClient, containerId, remotePath,
-                "codebuild-source", out -> createTarFromDir(sourceDir, out));
+                "codebuild-source", out -> createTarFromDir(sourceDir, out),
+                RetryingTarCopier.DEFAULT_MAX_ATTEMPTS, backoffMillis);
     }
 
     // Pulls the container's working directory back into the local workspace so
