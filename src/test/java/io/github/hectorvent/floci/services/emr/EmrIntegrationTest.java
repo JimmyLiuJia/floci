@@ -132,6 +132,30 @@ class EmrIntegrationTest {
 
     @Test
     @Order(9)
+    void addStepsPreservesRequestLevelExecutionRole() {
+        String roleArn = "arn:aws:iam::000000000000:role/emr-step";
+        Response added = emr("AddJobFlowSteps",
+                "{\"JobFlowId\":\"" + clusterId + "\",\"ExecutionRoleArn\":\"" + roleArn + "\","
+                        + "\"Steps\":[{\"Name\":\"first-role-step\",\"HadoopJarStep\":{\"Jar\":\"command-runner.jar\"}},"
+                        + "{\"Name\":\"second-role-step\",\"HadoopJarStep\":{\"Jar\":\"command-runner.jar\"}}]}");
+        added.then().statusCode(200).body("StepIds", hasSize(2));
+        String firstId = added.jsonPath().getString("StepIds[0]");
+        String secondId = added.jsonPath().getString("StepIds[1]");
+
+        emr("DescribeStep", "{\"ClusterId\":\"" + clusterId + "\",\"StepId\":\"" + firstId + "\"}")
+                .then().statusCode(200)
+                .body("Step.ExecutionRoleArn", equalTo(roleArn));
+        emr("DescribeStep", "{\"ClusterId\":\"" + clusterId + "\",\"StepId\":\"" + secondId + "\"}")
+                .then().statusCode(200)
+                .body("Step.ExecutionRoleArn", equalTo(roleArn));
+        emr("ListSteps", "{\"ClusterId\":\"" + clusterId + "\"}")
+                .then().statusCode(200)
+                .body("Steps.find { it.Id == '" + firstId + "' }.ExecutionRoleArn", equalTo(roleArn))
+                .body("Steps.find { it.Id == '" + secondId + "' }.ExecutionRoleArn", equalTo(roleArn));
+    }
+
+    @Test
+    @Order(9)
     void modifyStepConcurrency() {
         emr("ModifyCluster", "{\"ClusterId\":\"" + clusterId + "\",\"StepConcurrencyLevel\":5}")
                 .then().statusCode(200)
