@@ -157,6 +157,7 @@ public class EmrService {
                 continue;
             }
             cluster.setState("TERMINATED");
+            releaseInstanceCapacity(cluster);
             cluster.setStateChangeReasonCode("USER_REQUEST");
             cluster.setStateChangeMessage("Terminated by user request");
             cluster.setEndDateTime(Instant.now());
@@ -791,9 +792,22 @@ public class EmrService {
             return;
         }
         cluster.setState("TERMINATED");
+        releaseInstanceCapacity(cluster);
         cluster.setStateChangeReasonCode("ALL_STEPS_COMPLETED");
         cluster.setStateChangeMessage("All steps completed.");
         cluster.setEndDateTime(Instant.now());
+    }
+
+    private void releaseInstanceCapacity(EmrCluster cluster) {
+        for (EmrInstanceGroup group : cluster.getInstanceGroups()) {
+            group.setState("TERMINATED");
+            group.setRunningInstanceCount(0);
+        }
+        for (EmrInstanceFleet fleet : cluster.getInstanceFleets()) {
+            fleet.setState("TERMINATED");
+            fleet.setProvisionedOnDemandCapacity(0);
+            fleet.setProvisionedSpotCapacity(0);
+        }
     }
 
     private void initStep(EmrStep step) {
