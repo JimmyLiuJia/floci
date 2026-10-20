@@ -13,7 +13,9 @@ import org.junit.jupiter.api.TestMethodOrder;
 import static io.github.hectorvent.floci.testing.EmrRequests.emr;
 import static org.hamcrest.Matchers.endsWith;
 import static org.hamcrest.Matchers.equalTo;
+import static org.hamcrest.Matchers.hasKey;
 import static org.hamcrest.Matchers.hasSize;
+import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.notNullValue;
 import static org.hamcrest.Matchers.startsWith;
 
@@ -40,8 +42,10 @@ class EmrIntegrationTest {
     @Test
     @Order(1)
     void runJobFlow() {
+        String roleArn = "arn:aws:iam::000000000000:role/emr-initial-step";
         Response resp = emr("RunJobFlow",
                 "{\"Name\":\"floci-emr\",\"ReleaseLabel\":\"emr-7.5.0\","
+                        + "\"StepExecutionRoleArn\":\"" + roleArn + "\","
                         + "\"Instances\":{\"KeepJobFlowAliveWhenNoSteps\":true,"
                         + "\"InstanceGroups\":[{\"Name\":\"master\",\"InstanceRole\":\"MASTER\","
                         + "\"InstanceType\":\"m5.xlarge\",\"InstanceCount\":1},"
@@ -53,6 +57,11 @@ class EmrIntegrationTest {
                 .body("JobFlowId", startsWith("j-"))
                 .body("ClusterArn", notNullValue());
         clusterId = resp.jsonPath().getString("JobFlowId");
+        String initialStepId = emr("ListSteps", "{\"ClusterId\":\"" + clusterId + "\"}")
+                .then().statusCode(200).extract().jsonPath().getString("Steps[0].Id");
+        emr("DescribeStep", "{\"ClusterId\":\"" + clusterId + "\",\"StepId\":\"" + initialStepId + "\"}")
+                .then().statusCode(200)
+                .body("Step.ExecutionRoleArn", equalTo(roleArn));
     }
 
     @Test
@@ -150,8 +159,8 @@ class EmrIntegrationTest {
                 .body("Step.ExecutionRoleArn", equalTo(roleArn));
         emr("ListSteps", "{\"ClusterId\":\"" + clusterId + "\"}")
                 .then().statusCode(200)
-                .body("Steps.find { it.Id == '" + firstId + "' }.ExecutionRoleArn", equalTo(roleArn))
-                .body("Steps.find { it.Id == '" + secondId + "' }.ExecutionRoleArn", equalTo(roleArn));
+                .body("Steps.find { it.Id == '" + firstId + "' }", not(hasKey("ExecutionRoleArn")))
+                .body("Steps.find { it.Id == '" + secondId + "' }", not(hasKey("ExecutionRoleArn")));
     }
 
     @Test

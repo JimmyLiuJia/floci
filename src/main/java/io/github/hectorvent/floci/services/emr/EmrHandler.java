@@ -148,7 +148,7 @@ public class EmrHandler {
         cluster.setEc2Attributes(buildEc2Attributes(instances));
         cluster.setInstanceGroups(parseInstanceGroups(instances.path("InstanceGroups")));
         cluster.setInstanceFleets(parseInstanceFleets(instances.path("InstanceFleets")));
-        cluster.setSteps(parseSteps(request.path("Steps"), null));
+        cluster.setSteps(parseSteps(request.path("Steps"), text(request, "StepExecutionRoleArn")));
 
         EmrCluster created = service.runJobFlow(cluster, region);
         ObjectNode response = objectMapper.createObjectNode();
@@ -223,7 +223,7 @@ public class EmrHandler {
     private Response handleDescribeStep(JsonNode request) {
         EmrStep step = service.describeStep(text(request, "ClusterId"), text(request, "StepId"));
         ObjectNode response = objectMapper.createObjectNode();
-        response.set("Step", stepNode(step));
+        response.set("Step", stepNode(step, true));
         return Response.ok(response).build();
     }
 
@@ -233,7 +233,7 @@ public class EmrHandler {
         ObjectNode response = objectMapper.createObjectNode();
         ArrayNode arr = response.putArray("Steps");
         for (EmrStep step : steps) {
-            arr.add(stepNode(step));
+            arr.add(stepNode(step, false));
         }
         return Response.ok(response).build();
     }
@@ -607,7 +607,7 @@ public class EmrHandler {
         return status;
     }
 
-    private ObjectNode stepNode(EmrStep step) {
+    private ObjectNode stepNode(EmrStep step, boolean includeExecutionRole) {
         ObjectNode node = objectMapper.createObjectNode();
         node.put("Id", step.getId());
         node.put("Name", step.getName());
@@ -623,7 +623,7 @@ public class EmrHandler {
         ObjectNode props = config.putObject("Properties");
         step.getProperties().forEach(props::put);
         node.put("ActionOnFailure", step.getActionOnFailure());
-        if (step.getExecutionRoleArn() != null) {
+        if (includeExecutionRole && step.getExecutionRoleArn() != null) {
             node.put("ExecutionRoleArn", step.getExecutionRoleArn());
         }
         ObjectNode status = node.putObject("Status");

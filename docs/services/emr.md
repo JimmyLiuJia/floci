@@ -96,4 +96,5 @@ aws emr terminate-clusters --cluster-ids "$CLUSTER_ID"
 ```
 
 `aws emr add-steps --execution-role-arn` applies the role to every step in that request.
-`describe-step` and `list-steps` include `ExecutionRoleArn` for those steps.
+`RunJobFlow` also applies `StepExecutionRoleArn` to its initial steps. `describe-step`
+includes `ExecutionRoleArn` for those steps; `list-steps` returns step summaries without it.
