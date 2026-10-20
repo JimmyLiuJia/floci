@@ -259,7 +259,13 @@ public class CodeBuildRunner implements ContainerTeardown {
             }
 
             // Copy downloaded source files into the container (no-op for NO_SOURCE builds)
-            copySourceToContainer(containerId, workspace, containerSrcDir);
+            try {
+                copySourceToContainer(containerId, workspace, containerSrcDir);
+            } catch (RuntimeException e) {
+                if (stopFlag.get()) { finishStopped(build); return; }
+                completePhaseWithError(build, "DOWNLOAD_SOURCE", "FAILED", e.getMessage());
+                throw e;
+            }
 
             // INSTALL
             if (stopFlag.get()) { finishStopped(build); return; }
