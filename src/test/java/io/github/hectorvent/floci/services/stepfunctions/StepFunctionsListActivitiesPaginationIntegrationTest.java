@@ -18,7 +18,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @QuarkusTest
-class StepFunctionsListActivitiesPaginationIssueTest {
+class StepFunctionsListActivitiesPaginationIntegrationTest {
 
     private static final String CONTENT_TYPE = "application/x-amz-json-1.0";
 
@@ -93,7 +93,7 @@ class StepFunctionsListActivitiesPaginationIssueTest {
                 .body(Map.of("maxResults", 4294967296L))
                 .post("/")
                 .then().statusCode(400).extract().response();
-        assertTrue(response.asString().contains("ValidationException"));
+        assertEquals("ValidationException", response.jsonPath().getString("__type"));
     }
 
     @Test
@@ -105,17 +105,25 @@ class StepFunctionsListActivitiesPaginationIssueTest {
                     .body(Map.of("maxResults", maxResults))
                     .post("/")
                     .then().statusCode(400).extract().response();
-            assertTrue(response.asString().contains("ValidationException"));
+            assertEquals("ValidationException", response.jsonPath().getString("__type"));
         }
 
-        for (String nextToken : List.of("", "not-a-valid-token")) {
+        for (String nextToken : List.of("", "x".repeat(1025))) {
             Response response = given()
                     .header("X-Amz-Target", "AWSStepFunctions.ListActivities")
                     .contentType(CONTENT_TYPE)
                     .body(Map.of("nextToken", nextToken))
                     .post("/")
                     .then().statusCode(400).extract().response();
-            assertTrue(response.asString().contains("InvalidToken"));
+            assertEquals("ValidationException", response.jsonPath().getString("__type"));
         }
+
+        Response response = given()
+                .header("X-Amz-Target", "AWSStepFunctions.ListActivities")
+                .contentType(CONTENT_TYPE)
+                .body(Map.of("nextToken", "not-a-valid-token"))
+                .post("/")
+                .then().statusCode(400).extract().response();
+        assertEquals("InvalidToken", response.jsonPath().getString("__type"));
     }
 }
