@@ -13,6 +13,7 @@ import jakarta.ws.rs.core.Response;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.ArrayList;
 import java.util.Base64;
@@ -164,6 +165,18 @@ class CodeBuildListProjectsTest {
         timeCursor.put("sortValue", "invalid");
         assertInvalidToken(Map.of("sortBy", "CREATED_TIME", "nextToken",
                 Base64Url.encode(mapper.writeValueAsBytes(timeCursor))), REGION);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"null", "123", "{}"})
+    void rejectsNonTextualContinuationTokens(String value) throws Exception {
+        ObjectNode request = mapper.createObjectNode();
+        request.set("nextToken", mapper.readTree(value));
+
+        AwsException error = assertThrows(AwsException.class,
+                () -> handler.handle("ListProjects", request, REGION, ACCOUNT));
+        assertEquals("InvalidInputException", error.getErrorCode());
+        assertEquals(400, error.getHttpStatus());
     }
 
     @ParameterizedTest
