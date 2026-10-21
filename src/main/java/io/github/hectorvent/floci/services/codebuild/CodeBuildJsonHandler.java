@@ -20,6 +20,7 @@ import jakarta.ws.rs.core.Response;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -140,7 +141,13 @@ public class CodeBuildJsonHandler {
     private Response listProjects(JsonNode req, String region) throws JsonProcessingException {
         String sortBy = req.path("sortBy").asText(null);
         String sortOrder = req.path("sortOrder").asText(null);
-        List<String> names = service.listProjects(region, sortBy, sortOrder);
+        if (sortBy == null && sortOrder == null && !req.has("nextToken")) {
+            List<String> names = service.listProjects(region);
+            if (names.size() <= LIST_PROJECTS_PAGE_SIZE) {
+                return Response.ok(Map.of("projects", names)).build();
+            }
+        }
+        List<Project> projects = service.listProjectRecords(region, sortBy, sortOrder);
         int start = 0;
         if (req.has("nextToken")) {
             JsonNode tokenNode = req.get("nextToken");
@@ -153,28 +160,48 @@ public class CodeBuildJsonHandler {
             } catch (IllegalArgumentException | IOException e) {
                 throw new AwsException("InvalidInputException", "Invalid nextToken", 400);
             }
-            JsonNode offset = cursor == null ? null : cursor.path("offset");
+            JsonNode lastName = cursor == null ? null : cursor.path("lastName");
+            JsonNode sortValue = cursor == null ? null : cursor.path("sortValue");
             if (cursor == null || !"ListProjects".equals(cursor.path("action").asText(null))
                     || !region.equals(cursor.path("region").asText(null))
                     || !cursor.has("sortBy") || !Objects.equals(sortBy, cursor.path("sortBy").asText(null))
                     || !cursor.has("sortOrder") || !Objects.equals(sortOrder, cursor.path("sortOrder").asText(null))
-                    || !offset.isInt() || offset.asInt() < LIST_PROJECTS_PAGE_SIZE
-                    || offset.asInt() % LIST_PROJECTS_PAGE_SIZE != 0 || offset.asInt() >= names.size()) {
+                    || !lastName.isTextual() || lastName.asText().isEmpty()
+                    || (sortBy == null || "NAME".equals(sortBy)) && !sortValue.isNull()
+                    || !sortValue.isNull() && !sortValue.isNumber()) {
                 throw new AwsException("InvalidInputException", "Invalid nextToken", 400);
             }
-            start = offset.asInt();
+            Double value = sortValue.isNull() ? null : sortValue.asDouble();
+            if (value != null && !Double.isFinite(value)) {
+                throw new AwsException("InvalidInputException", "Invalid nextToken", 400);
+            }
+            Project anchor = new Project();
+            anchor.setName(lastName.asText());
+            anchor.setCreated(value);
+            anchor.setLastModified(value);
+            Comparator<Project> comparator = service.projectComparator(sortBy, sortOrder);
+            while (start < projects.size() && comparator.compare(projects.get(start), anchor) <= 0) {
+                start++;
+            }
         }
 
-        int end = Math.min(start + LIST_PROJECTS_PAGE_SIZE, names.size());
+        int end = Math.min(start + LIST_PROJECTS_PAGE_SIZE, projects.size());
         Map<String, Object> result = new HashMap<>();
-        result.put("projects", names.subList(start, end));
-        if (end < names.size()) {
+        result.put("projects", projects.subList(start, end).stream().map(Project::getName).toList());
+        if (end < projects.size()) {
+            Project last = projects.get(end - 1);
+            Double value = switch (sortBy == null ? "NAME" : sortBy) {
+                case "CREATED_TIME" -> last.getCreated();
+                case "LAST_MODIFIED_TIME" -> last.getLastModified();
+                default -> null;
+            };
             ObjectNode cursor = mapper.createObjectNode();
             cursor.put("action", "ListProjects");
             cursor.put("region", region);
             cursor.put("sortBy", sortBy);
             cursor.put("sortOrder", sortOrder);
-            cursor.put("offset", end);
+            cursor.put("lastName", last.getName());
+            cursor.put("sortValue", value);
             result.put("nextToken", Base64Url.encode(mapper.writeValueAsBytes(cursor)));
         }
         return Response.ok(result).build();

@@ -1,8 +1,10 @@
 package io.github.hectorvent.floci.services.codebuild;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.github.hectorvent.floci.config.EmulatorConfig;
 import io.github.hectorvent.floci.core.common.AwsException;
+import io.github.hectorvent.floci.core.common.Base64Url;
 import io.github.hectorvent.floci.services.codebuild.model.Project;
 import io.github.hectorvent.floci.services.codebuild.model.ProjectArtifacts;
 import io.github.hectorvent.floci.services.codebuild.model.ProjectEnvironment;
@@ -13,6 +15,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -90,7 +93,7 @@ class CodeBuildListProjectsTest {
         IntStream.range(0, 101).forEach(index -> createProject(REGION,
                 "project-%03d".formatted(index), (double) (101 - index), (double) index));
 
-        assertPagesMatchServiceOrder(Map.of(), service.listProjects(REGION));
+        assertPagesMatchServiceOrder(Map.of(), service.listProjects(REGION).stream().sorted().toList());
         assertPagesMatchServiceOrder(Map.of("sortBy", "NAME", "sortOrder", "DESCENDING"),
                 service.listProjects(REGION, "NAME", "DESCENDING"));
         assertPagesMatchServiceOrder(Map.of("sortBy", "CREATED_TIME", "sortOrder", "ASCENDING"),
@@ -149,6 +152,39 @@ class CodeBuildListProjectsTest {
                 REGION);
         assertInvalidToken(Map.of("sortBy", "NAME", "sortOrder", "ASCENDING", "nextToken", token),
                 "eu-west-1");
+
+        ObjectNode cursor = (ObjectNode) mapper.readTree(Base64.getUrlDecoder().decode(token));
+        cursor.put("sortValue", 1.0);
+        assertInvalidToken(Map.of("sortBy", "NAME", "sortOrder", "ASCENDING", "nextToken",
+                Base64Url.encode(mapper.writeValueAsBytes(cursor))), REGION);
+
+        String timeToken = (String) listPage(Map.of("sortBy", "CREATED_TIME"))
+                .get("nextToken");
+        ObjectNode timeCursor = (ObjectNode) mapper.readTree(Base64.getUrlDecoder().decode(timeToken));
+        timeCursor.put("sortValue", "invalid");
+        assertInvalidToken(Map.of("sortBy", "CREATED_TIME", "nextToken",
+                Base64Url.encode(mapper.writeValueAsBytes(timeCursor))), REGION);
+    }
+
+    @ParameterizedTest
+    @CsvSource({"DEFAULT", "NAME", "CREATED_TIME"})
+    void continuesAfterDeletingTheLastProjectOnThePreviousPage(String sortBy) throws Exception {
+        IntStream.range(0, 101).forEach(index -> createProject(REGION,
+                "project-%03d".formatted(index), 1.0, null));
+        Map<String, String> request = switch (sortBy) {
+            case "NAME" -> Map.of("sortBy", "NAME", "sortOrder", "ASCENDING");
+            case "CREATED_TIME" -> Map.of("sortBy", "CREATED_TIME", "sortOrder", "DESCENDING");
+            default -> Map.of();
+        };
+        String token = (String) listPage(request).get("nextToken");
+        assertNotNull(token);
+
+        service.deleteProject(REGION, "project-099");
+        Map<String, String> nextRequest = new HashMap<>(request);
+        nextRequest.put("nextToken", token);
+        Map<String, Object> nextPage = listPage(nextRequest);
+        assertEquals(List.of("project-100"), nextPage.get("projects"));
+        assertFalse(nextPage.containsKey("nextToken"));
     }
 
     @SuppressWarnings("unchecked")

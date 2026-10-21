@@ -254,6 +254,18 @@ public class CodeBuildService {
         if (sortBy == null && sortOrder == null) {
             return listProjects(region);
         }
+        return listProjectRecords(region, sortBy, sortOrder).stream()
+                .map(Project::getName)
+                .toList();
+    }
+
+    List<Project> listProjectRecords(String region, String sortBy, String sortOrder) {
+        return projectsFor(region).values().stream()
+                .sorted(projectComparator(sortBy, sortOrder))
+                .toList();
+    }
+
+    Comparator<Project> projectComparator(String sortBy, String sortOrder) {
         Comparator<Project> comparator = switch (sortBy == null ? "NAME" : sortBy) {
             case "NAME" -> Comparator.comparing(Project::getName);
             case "CREATED_TIME" -> Comparator.comparing(Project::getCreated,
@@ -265,10 +277,7 @@ public class CodeBuildService {
         if (isDescendingSortOrder(sortOrder, false)) {
             comparator = comparator.reversed();
         }
-        return projectsFor(region).values().stream()
-                .sorted(comparator.thenComparing(Project::getName))
-                .map(Project::getName)
-                .toList();
+        return comparator.thenComparing(Project::getName);
     }
 
     // ---- Report Groups ----
