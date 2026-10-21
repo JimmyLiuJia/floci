@@ -1,5 +1,6 @@
 package io.github.hectorvent.floci.services.cloudformation;
 
+import io.github.hectorvent.floci.testing.CfnRequests;
 import io.github.hectorvent.floci.testing.CfnStackWaits;
 import io.github.hectorvent.floci.testing.CloudFormationSettingsProfile;
 import io.github.hectorvent.floci.testing.RestAssuredJsonUtils;
@@ -11,10 +12,11 @@ import io.restassured.specification.RequestSpecification;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
-import static io.restassured.RestAssured.given;
+import static io.github.hectorvent.floci.testing.WafV2Requests.waf;
 import static org.hamcrest.Matchers.contains;
 import static org.hamcrest.Matchers.equalTo;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @QuarkusTest
 @TestProfile(CloudFormationSettingsProfile.class)
@@ -70,6 +72,21 @@ class CloudFormationWafV2LoggingConfigurationIntegrationTest {
         String logB = output(created, "LogGroupBArn");
         assertStored(aclA, logA);
 
+        String changeSetName = "wafv2-logging-replacement-" + suffix;
+        CfnRequests.cfn("CreateChangeSet", stackName)
+            .header("Authorization", CFN_AUTH)
+            .formParam("ChangeSetName", changeSetName)
+            .formParam("ChangeSetType", "UPDATE")
+            .formParam("TemplateBody", template(suffix, "AclB", "LogGroupB", false))
+        .when().post("/").then().statusCode(200);
+        String changeSetXml = CfnRequests.cfn("DescribeChangeSet", stackName)
+            .header("Authorization", CFN_AUTH)
+            .formParam("ChangeSetName", changeSetName)
+        .when().post("/").then().statusCode(200).extract().asString();
+        assertEquals("True", XmlPath.from(changeSetXml).getString(
+                "DescribeChangeSetResponse.DescribeChangeSetResult.Changes.member"
+                + ".find { it.ResourceChange.LogicalResourceId == 'Logging' }.ResourceChange.Replacement"));
+
         cfn("UpdateStack", stackName, template(suffix, "AclA", "LogGroupB", false));
         assertStatus(stackName, "UPDATE_COMPLETE");
         assertEquals(aclA, output(describeStack(stackName), "LoggingRef"));
@@ -92,6 +109,13 @@ class CloudFormationWafV2LoggingConfigurationIntegrationTest {
         assertEquals(aclB, output(describeStack(stackName), "LoggingRef"));
         assertStored(aclB, logB);
         assertMissing(aclA);
+
+        deleteLoggingConfiguration(aclB).statusCode(200);
+        assertMissing(aclB);
+        cfn("UpdateStack", stackName, template(suffix, "AclB", "LogGroupA", true));
+        assertStatus(stackName, "UPDATE_ROLLBACK_COMPLETE");
+        assertTrue(CfnStackWaits.failedResourceReason(stackName, CFN_AUTH).contains("AWS::Fake::Thing"));
+        assertMissing(aclB);
 
         cfn("DeleteStack", stackName, null);
         CfnStackWaits.awaitStackDeleted(stackName, CFN_AUTH);
@@ -248,22 +272,8 @@ class CloudFormationWafV2LoggingConfigurationIntegrationTest {
         return waf("DeleteLoggingConfiguration", "{\"ResourceArn\":\"" + resourceArn + "\"}");
     }
 
-    private ValidatableResponse waf(String action, String body) {
-        return given()
-            .contentType("application/x-amz-json-1.1")
-            .header("X-Amz-Target", "AWSWAF_20190729." + action)
-            .body(body)
-        .when()
-            .post("/")
-        .then();
-    }
-
     private void cfn(String action, String stackName, String template) {
-        RequestSpecification request = given()
-            .contentType("application/x-www-form-urlencoded")
-            .header("Authorization", CFN_AUTH)
-            .formParam("Action", action)
-            .formParam("StackName", stackName);
+        RequestSpecification request = CfnRequests.cfn(action, stackName).header("Authorization", CFN_AUTH);
         if (template != null) {
             request.formParam("TemplateBody", template);
         }
@@ -271,11 +281,8 @@ class CloudFormationWafV2LoggingConfigurationIntegrationTest {
     }
 
     private String describeStack(String stackName) {
-        return given()
-            .contentType("application/x-www-form-urlencoded")
+        return CfnRequests.cfn("DescribeStacks", stackName)
             .header("Authorization", CFN_AUTH)
-            .formParam("Action", "DescribeStacks")
-            .formParam("StackName", stackName)
         .when()
             .post("/")
         .then()

@@ -641,6 +641,40 @@ class WafV2CfnProvisionerTest {
     }
 
     @Test
+    void loggingConfigurationSameArnUpdateAfterExternalDeletionRemovesRecreatedConfigOnRollback() {
+        when(wafV2.getLoggingConfiguration(ACL_A)).thenThrow(
+                new AwsException("WAFNonexistentItemException", "No logging configuration", 400));
+        StackResource resource = loggingResource();
+        resource.setPhysicalId(ACL_A);
+        ObjectNode updated = loggingProps(ACL_A, "arn:logs:new");
+
+        provisioner.provision(resource, updated, updateContext(ACL_A));
+
+        assertEquals(ACL_A, resource.getPhysicalId());
+        assertFalse(provisioner.hasReplacementUpdate(resource));
+        assertEquals("true", resource.getAttributes().get(CfnRollback.WAF_LOGGING_UPDATE_ABSENT_ATTR));
+        assertTrue(provisioner.rollbackUpdate(resource));
+        verify(wafV2).putLoggingConfiguration(ACL_A, updated.toString());
+        verify(wafV2).deleteLoggingConfiguration(ACL_A);
+        assertFalse(resource.getAttributes().containsKey(CfnRollback.WAF_LOGGING_UPDATE_ABSENT_ATTR));
+    }
+
+    @Test
+    void loggingConfigurationSameArnUpdateAfterExternalDeletionClearsMarkerOnCommit() {
+        when(wafV2.getLoggingConfiguration(ACL_A)).thenThrow(
+                new AwsException("WAFNonexistentItemException", "No logging configuration", 400));
+        StackResource resource = loggingResource();
+        resource.setPhysicalId(ACL_A);
+
+        provisioner.provision(resource, loggingProps(ACL_A, "arn:logs:new"), updateContext(ACL_A));
+
+        assertTrue(provisioner.completeUpdate(resource).applicable());
+        provisioner.clearUpdate(resource);
+        assertFalse(resource.getAttributes().containsKey(CfnRollback.WAF_LOGGING_UPDATE_ABSENT_ATTR));
+        verify(wafV2, never()).deleteLoggingConfiguration(anyString());
+    }
+
+    @Test
     void loggingConfigurationSameArnUpdateClearsSnapshotAfterCommit() {
         String previous = loggingProps(ACL_A, "arn:logs:old").toString();
         when(wafV2.getLoggingConfiguration(ACL_A)).thenReturn(previous);
