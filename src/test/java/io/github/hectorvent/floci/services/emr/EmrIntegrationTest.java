@@ -120,14 +120,20 @@ class EmrIntegrationTest {
 
         EmrCluster cluster = emrService.describeCluster(clusterId);
         Instant originalCreationTime = cluster.getCreationDateTime();
-        cluster.setCreationDateTime(Instant.ofEpochSecond(1_761_000_000L));
+        cluster.setCreationDateTime(Instant.ofEpochMilli(1_761_000_000_000L));
         try {
+            emr("ListClusters", "{\"CreatedBefore\":1761000000.001}")
+                    .then().statusCode(200)
+                    .body("Clusters.find { it.Id == '" + clusterId + "' }.Name", equalTo("floci-emr"));
+            emr("ListClusters", "{\"CreatedAfter\":1760999999.999}")
+                    .then().statusCode(200)
+                    .body("Clusters.find { it.Id == '" + clusterId + "' }.Name", equalTo("floci-emr"));
             emr("ListClusters", "{\"CreatedBefore\":1761000000.000000001}")
                     .then().statusCode(200)
-                    .body("Clusters.find { it.Id == '" + clusterId + "' }.Name", equalTo("floci-emr"));
+                    .body("Clusters.find { it.Id == '" + clusterId + "' }", nullValue());
             emr("ListClusters", "{\"CreatedAfter\":1760999999.999999999}")
                     .then().statusCode(200)
-                    .body("Clusters.find { it.Id == '" + clusterId + "' }.Name", equalTo("floci-emr"));
+                    .body("Clusters.find { it.Id == '" + clusterId + "' }", nullValue());
         } finally {
             cluster.setCreationDateTime(originalCreationTime);
         }
