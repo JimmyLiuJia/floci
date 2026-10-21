@@ -151,14 +151,14 @@ public class FirehoseJsonHandler {
                 if (limitNode != null && !limitNode.isNull()
                         && (!limitNode.isIntegralNumber() || !limitNode.canConvertToInt()
                         || limit < 1 || limit > 10000)) {
-                    throw new AwsException("InvalidArgumentException", "Limit must be between 1 and 10000.", 400);
+                    throw new AwsException("ValidationException", "Limit must be between 1 and 10000.", 400);
                 }
                 JsonNode startNode = request.get("ExclusiveStartDeliveryStreamName");
                 String startName = startNode == null || startNode.isNull() ? null : startNode.asText();
                 if (startNode != null && !startNode.isNull()
                         && (!startNode.isTextual() || startName.length() < 1 || startName.length() > 64
                         || !startName.matches("[a-zA-Z0-9_.-]+"))) {
-                    throw new AwsException("InvalidArgumentException",
+                    throw new AwsException("ValidationException",
                             "ExclusiveStartDeliveryStreamName must be a valid delivery stream name.", 400);
                 }
                 FirehoseService.DeliveryStreamPage page = firehoseService.listDeliveryStreams(limit, startName);

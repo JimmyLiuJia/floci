@@ -12,6 +12,7 @@ import java.util.Map;
 import java.util.UUID;
 
 import static io.restassured.RestAssured.given;
+import static org.hamcrest.Matchers.equalTo;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -105,7 +106,19 @@ class FirehoseListDeliveryStreamsPaginationIntegrationTest {
                     .contentType(CONTENT_TYPE)
                     .body(Map.of("Limit", limit))
                     .post("/")
-                    .then().statusCode(400);
+                    .then().statusCode(400).body("__type", equalTo("ValidationException"));
+        }
+    }
+
+    @Test
+    void rejectsInvalidStartDeliveryStreamNames() {
+        for (String name : List.of("", "bad/name", "x".repeat(65))) {
+            given()
+                    .header("X-Amz-Target", TARGET_PREFIX + "ListDeliveryStreams")
+                    .contentType(CONTENT_TYPE)
+                    .body(Map.of("ExclusiveStartDeliveryStreamName", name))
+                    .post("/")
+                    .then().statusCode(400).body("__type", equalTo("ValidationException"));
         }
     }
 }
