@@ -18,6 +18,8 @@ import java.util.UUID;
 import java.util.stream.IntStream;
 
 import static io.restassured.RestAssured.given;
+import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.equalTo;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 @QuarkusTest
@@ -78,6 +80,29 @@ class CodeBuildBuildListSortingIntegrationTest {
 
         assertEquals(expected, listBuildsForProject("ASCENDING"));
         assertEquals(expected.reversed(), listBuildsForProject("DESCENDING"));
+    }
+
+    @Test
+    void invalidSortOrderIsRejectedWithoutChangingBuilds() {
+        List<String> allBuilds = listBuilds("DESCENDING");
+        List<String> projectBuilds = listBuildsForProject("DESCENDING");
+
+        given().header("X-Amz-Target", "CodeBuild_20161006.ListBuilds")
+                .contentType(CONTENT_TYPE).body("{\"sortOrder\":\"UNKNOWN\"}")
+                .post("/").then().statusCode(400)
+                .body("__type", equalTo("InvalidInputException"))
+                .body("message", containsString("Invalid sortOrder"));
+        assertEquals(allBuilds, listBuilds("DESCENDING"));
+        assertEquals(projectBuilds, listBuildsForProject("DESCENDING"));
+
+        given().header("X-Amz-Target", "CodeBuild_20161006.ListBuildsForProject")
+                .contentType(CONTENT_TYPE)
+                .body("{\"projectName\":\"" + projectName + "\",\"sortOrder\":\"UNKNOWN\"}")
+                .post("/").then().statusCode(400)
+                .body("__type", equalTo("InvalidInputException"))
+                .body("message", containsString("Invalid sortOrder"));
+        assertEquals(allBuilds, listBuilds("DESCENDING"));
+        assertEquals(projectBuilds, listBuildsForProject("DESCENDING"));
     }
 
     private List<String> listBuilds(String sortOrder) {
