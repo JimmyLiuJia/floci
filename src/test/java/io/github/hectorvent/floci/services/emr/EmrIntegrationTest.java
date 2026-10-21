@@ -10,6 +10,9 @@ import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
 
+import java.math.BigDecimal;
+import java.time.Instant;
+
 import static io.github.hectorvent.floci.testing.EmrRequests.emr;
 import static org.hamcrest.Matchers.endsWith;
 import static org.hamcrest.Matchers.equalTo;
@@ -17,6 +20,7 @@ import static org.hamcrest.Matchers.hasKey;
 import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.notNullValue;
+import static org.hamcrest.Matchers.nullValue;
 import static org.hamcrest.Matchers.startsWith;
 
 /**
@@ -79,10 +83,46 @@ class EmrIntegrationTest {
 
     @Test
     @Order(3)
-    void listClustersFilteredByState() {
+    void listClustersFilteredByStateAndCreationTime() {
         emr("ListClusters", "{\"ClusterStates\":[\"WAITING\"]}")
                 .then().statusCode(200)
                 .body("Clusters.find { it.Id == '" + clusterId + "' }.Name", equalTo("floci-emr"));
+
+        emr("ListClusters", "{\"CreatedAfter\":4102444800}")
+                .then().statusCode(200)
+                .body("Clusters.find { it.Id == '" + clusterId + "' }", nullValue());
+        emr("ListClusters", "{\"CreatedBefore\":946684800}")
+                .then().statusCode(200)
+                .body("Clusters.find { it.Id == '" + clusterId + "' }", nullValue());
+        emr("ListClusters", "{\"ClusterStates\":[\"WAITING\"],\"CreatedAfter\":946684800,"
+                        + "\"CreatedBefore\":4102444800}")
+                .then().statusCode(200)
+                .body("Clusters.find { it.Id == '" + clusterId + "' }.Name", equalTo("floci-emr"));
+
+        Instant createdAt = emrService.describeCluster(clusterId).getCreationDateTime();
+        BigDecimal epochSeconds = BigDecimal.valueOf(createdAt.getEpochSecond())
+                .add(BigDecimal.valueOf(createdAt.getNano(), 9));
+        String shortlyBefore = epochSeconds.subtract(new BigDecimal("0.1")).toPlainString();
+        String shortlyAfter = epochSeconds.add(new BigDecimal("0.1")).toPlainString();
+        emr("ListClusters", "{\"CreatedAfter\":" + shortlyAfter + "}")
+                .then().statusCode(200)
+                .body("Clusters.find { it.Id == '" + clusterId + "' }", nullValue());
+        emr("ListClusters", "{\"CreatedBefore\":" + shortlyBefore + "}")
+                .then().statusCode(200)
+                .body("Clusters.find { it.Id == '" + clusterId + "' }", nullValue());
+        emr("ListClusters", "{\"CreatedAfter\":" + shortlyBefore + ",\"CreatedBefore\":" + shortlyAfter + "}")
+                .then().statusCode(200)
+                .body("Clusters.find { it.Id == '" + clusterId + "' }.Name", equalTo("floci-emr"));
+        emr("ListClusters", "{\"ClusterStates\":[\"TERMINATED\"],\"CreatedAfter\":" + shortlyBefore + "}")
+                .then().statusCode(200)
+                .body("Clusters.find { it.Id == '" + clusterId + "' }", nullValue());
+
+        emr("ListClusters", "{\"CreatedAfter\":\"invalid\"}")
+                .then().statusCode(400)
+                .body("__type", equalTo("InvalidRequestException"));
+        emr("ListClusters", "{\"CreatedBefore\":123456789012345678901234567890}")
+                .then().statusCode(400)
+                .body("__type", equalTo("InvalidRequestException"));
     }
 
     @Test

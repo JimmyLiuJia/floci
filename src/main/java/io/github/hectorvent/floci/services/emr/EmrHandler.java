@@ -21,6 +21,9 @@ import jakarta.inject.Inject;
 import jakarta.ws.rs.core.Response;
 import org.jboss.logging.Logger;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.time.DateTimeException;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
@@ -167,9 +170,11 @@ public class EmrHandler {
 
     private Response handleListClusters(JsonNode request, String region) {
         List<String> states = stringList(request.path("ClusterStates"));
+        Instant createdAfter = timestamp(request, "CreatedAfter");
+        Instant createdBefore = timestamp(request, "CreatedBefore");
         ObjectNode response = objectMapper.createObjectNode();
         ArrayNode arr = response.putArray("Clusters");
-        for (EmrCluster c : service.listClusters(region, states)) {
+        for (EmrCluster c : service.listClusters(region, states, createdAfter, createdBefore)) {
             arr.add(clusterSummaryNode(c));
         }
         return Response.ok(response).build();
@@ -859,6 +864,25 @@ public class EmrHandler {
     private String text(JsonNode request, String field) {
         JsonNode node = request.path(field);
         return node.isMissingNode() || node.isNull() ? null : node.asText(null);
+    }
+
+    private Instant timestamp(JsonNode request, String field) {
+        JsonNode node = request.path(field);
+        if (node.isMissingNode() || node.isNull()) {
+            return null;
+        }
+        if (!node.isNumber()) {
+            throw new AwsException("InvalidRequestException", field + " must be a numeric timestamp.", 400);
+        }
+        try {
+            BigDecimal seconds = node.decimalValue();
+            long wholeSeconds = seconds.setScale(0, RoundingMode.DOWN).longValueExact();
+            long nanos = seconds.subtract(BigDecimal.valueOf(wholeSeconds))
+                    .movePointRight(9).setScale(0, RoundingMode.HALF_UP).longValueExact();
+            return Instant.ofEpochSecond(wholeSeconds, nanos);
+        } catch (ArithmeticException | DateTimeException e) {
+            throw new AwsException("InvalidRequestException", field + " is outside the timestamp range.", 400);
+        }
     }
 
     private String rawArray(JsonNode node) {
