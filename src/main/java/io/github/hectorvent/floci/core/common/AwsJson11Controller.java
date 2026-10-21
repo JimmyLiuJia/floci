@@ -291,9 +291,12 @@ public class AwsJson11Controller {
         JsonNode request;
         try {
             // No payload is how an operation without input goes over the wire, so it reads as {}.
+            ObjectReader bodyReader = "elasticmapreduce".equals(serviceKey) && "ListClusters".equals(action)
+                    ? strictBodyReader.with(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS)
+                    : strictBodyReader;
             request = body == null || body.isBlank()
                     ? objectMapper.createObjectNode()
-                    : strictBodyReader.readTree(body);
+                    : bodyReader.readTree(body);
         } catch (JsonProcessingException e) {
             return JsonErrorResponseUtils.createSerializationErrorResponse();
         }

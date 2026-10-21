@@ -1,5 +1,6 @@
 package io.github.hectorvent.floci.services.emr;
 
+import io.github.hectorvent.floci.services.emr.model.EmrCluster;
 import io.github.hectorvent.floci.testing.RestAssuredJsonUtils;
 import io.quarkus.test.junit.QuarkusTest;
 import io.restassured.response.Response;
@@ -116,6 +117,20 @@ class EmrIntegrationTest {
         emr("ListClusters", "{\"ClusterStates\":[\"TERMINATED\"],\"CreatedAfter\":" + shortlyBefore + "}")
                 .then().statusCode(200)
                 .body("Clusters.find { it.Id == '" + clusterId + "' }", nullValue());
+
+        EmrCluster cluster = emrService.describeCluster(clusterId);
+        Instant originalCreationTime = cluster.getCreationDateTime();
+        cluster.setCreationDateTime(Instant.ofEpochSecond(1_761_000_000L));
+        try {
+            emr("ListClusters", "{\"CreatedBefore\":1761000000.000000001}")
+                    .then().statusCode(200)
+                    .body("Clusters.find { it.Id == '" + clusterId + "' }.Name", equalTo("floci-emr"));
+            emr("ListClusters", "{\"CreatedAfter\":1760999999.999999999}")
+                    .then().statusCode(200)
+                    .body("Clusters.find { it.Id == '" + clusterId + "' }.Name", equalTo("floci-emr"));
+        } finally {
+            cluster.setCreationDateTime(originalCreationTime);
+        }
 
         emr("ListClusters", "{\"CreatedAfter\":\"invalid\"}")
                 .then().statusCode(400)
