@@ -1,8 +1,11 @@
 package io.github.hectorvent.floci.services.codebuild;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.github.hectorvent.floci.core.common.AwsException;
+import io.github.hectorvent.floci.core.common.Base64Url;
 import io.github.hectorvent.floci.services.codebuild.model.Build;
 import io.github.hectorvent.floci.services.codebuild.model.Project;
 import io.github.hectorvent.floci.services.codebuild.model.ProjectArtifacts;
@@ -14,14 +17,19 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.core.Response;
 
+import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.stream.Stream;
 
 @ApplicationScoped
 public class CodeBuildJsonHandler {
+
+    private static final int LIST_PROJECTS_PAGE_SIZE = 100;
 
     private final CodeBuildService service;
     private final ObjectMapper mapper;
@@ -129,10 +137,47 @@ public class CodeBuildJsonHandler {
         return Response.ok(Map.of("projects", found, "projectsNotFound", notFound)).build();
     }
 
-    private Response listProjects(JsonNode req, String region) {
-        List<String> names = service.listProjects(region,
-                req.path("sortBy").asText(null), req.path("sortOrder").asText(null));
-        return Response.ok(Map.of("projects", names)).build();
+    private Response listProjects(JsonNode req, String region) throws JsonProcessingException {
+        String sortBy = req.path("sortBy").asText(null);
+        String sortOrder = req.path("sortOrder").asText(null);
+        List<String> names = service.listProjects(region, sortBy, sortOrder);
+        int start = 0;
+        if (req.has("nextToken")) {
+            JsonNode tokenNode = req.get("nextToken");
+            if (!tokenNode.isTextual() || tokenNode.asText().isEmpty()) {
+                throw new AwsException("InvalidInputException", "Invalid nextToken", 400);
+            }
+            JsonNode cursor;
+            try {
+                cursor = mapper.readTree(Base64.getUrlDecoder().decode(tokenNode.asText()));
+            } catch (IllegalArgumentException | IOException e) {
+                throw new AwsException("InvalidInputException", "Invalid nextToken", 400);
+            }
+            JsonNode offset = cursor == null ? null : cursor.path("offset");
+            if (cursor == null || !"ListProjects".equals(cursor.path("action").asText(null))
+                    || !region.equals(cursor.path("region").asText(null))
+                    || !cursor.has("sortBy") || !Objects.equals(sortBy, cursor.path("sortBy").asText(null))
+                    || !cursor.has("sortOrder") || !Objects.equals(sortOrder, cursor.path("sortOrder").asText(null))
+                    || !offset.isInt() || offset.asInt() < LIST_PROJECTS_PAGE_SIZE
+                    || offset.asInt() % LIST_PROJECTS_PAGE_SIZE != 0 || offset.asInt() >= names.size()) {
+                throw new AwsException("InvalidInputException", "Invalid nextToken", 400);
+            }
+            start = offset.asInt();
+        }
+
+        int end = Math.min(start + LIST_PROJECTS_PAGE_SIZE, names.size());
+        Map<String, Object> result = new HashMap<>();
+        result.put("projects", names.subList(start, end));
+        if (end < names.size()) {
+            ObjectNode cursor = mapper.createObjectNode();
+            cursor.put("action", "ListProjects");
+            cursor.put("region", region);
+            cursor.put("sortBy", sortBy);
+            cursor.put("sortOrder", sortOrder);
+            cursor.put("offset", end);
+            result.put("nextToken", Base64Url.encode(mapper.writeValueAsBytes(cursor)));
+        }
+        return Response.ok(result).build();
     }
 
     private Response createReportGroup(JsonNode req, String region, String account) throws Exception {
