@@ -70,6 +70,7 @@ class CodeBuildBuildListSortingIntegrationTest {
 
         assertEquals(expected, listBuilds("ASCENDING"));
         assertEquals(expected.reversed(), listBuilds("DESCENDING"));
+        assertEquals(expected.reversed(), listBuilds(null));
     }
 
     @Test
@@ -80,6 +81,7 @@ class CodeBuildBuildListSortingIntegrationTest {
 
         assertEquals(expected, listBuildsForProject("ASCENDING"));
         assertEquals(expected.reversed(), listBuildsForProject("DESCENDING"));
+        assertEquals(expected.reversed(), listBuildsForProject(null));
     }
 
     @Test
@@ -107,7 +109,8 @@ class CodeBuildBuildListSortingIntegrationTest {
 
     private List<String> listBuilds(String sortOrder) {
         List<String> ids = given().header("X-Amz-Target", "CodeBuild_20161006.ListBuilds")
-                .contentType(CONTENT_TYPE).body("{\"sortOrder\":\"" + sortOrder + "\"}")
+                .contentType(CONTENT_TYPE)
+                .body(sortOrder == null ? "{}" : "{\"sortOrder\":\"" + sortOrder + "\"}")
                 .post("/").then().statusCode(200)
                 .extract().jsonPath().getList("ids", String.class);
         return ids.stream().filter(id -> id.startsWith(projectName + ":")).toList();
@@ -116,7 +119,8 @@ class CodeBuildBuildListSortingIntegrationTest {
     private List<String> listBuildsForProject(String sortOrder) {
         return given().header("X-Amz-Target", "CodeBuild_20161006.ListBuildsForProject")
                 .contentType(CONTENT_TYPE)
-                .body("{\"projectName\":\"" + projectName + "\",\"sortOrder\":\"" + sortOrder + "\"}")
+                .body("{\"projectName\":\"" + projectName + "\""
+                        + (sortOrder == null ? "" : ",\"sortOrder\":\"" + sortOrder + "\"") + "}")
                 .post("/").then().statusCode(200)
                 .extract().jsonPath().getList("ids", String.class);
     }

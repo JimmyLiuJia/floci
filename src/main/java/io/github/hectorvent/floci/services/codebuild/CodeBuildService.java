@@ -262,10 +262,7 @@ public class CodeBuildService {
                     Comparator.nullsFirst(Comparator.naturalOrder()));
             default -> throw new AwsException("InvalidInputException", "Invalid sortBy: " + sortBy, 400);
         };
-        if (sortOrder != null && !"ASCENDING".equals(sortOrder) && !"DESCENDING".equals(sortOrder)) {
-            throw new AwsException("InvalidInputException", "Invalid sortOrder: " + sortOrder, 400);
-        }
-        if ("DESCENDING".equals(sortOrder)) {
+        if (isDescendingSortOrder(sortOrder, false)) {
             comparator = comparator.reversed();
         }
         return projectsFor(region).values().stream()
@@ -524,7 +521,7 @@ public class CodeBuildService {
 
     public List<String> listBuilds(String region, String account, String sortOrder) {
         Comparator<String> comparator = Comparator.naturalOrder();
-        if (descendingBuildList(sortOrder)) {
+        if (isDescendingSortOrder(sortOrder, true)) {
             comparator = comparator.reversed();
         }
         return buildsFor(account, region).keySet().stream()
@@ -536,7 +533,7 @@ public class CodeBuildService {
                                              String sortOrder) {
         Comparator<Build> comparator = Comparator.comparing(Build::getBuildNumber)
                 .thenComparing(Build::getId);
-        if (descendingBuildList(sortOrder)) {
+        if (isDescendingSortOrder(sortOrder, true)) {
             comparator = comparator.reversed();
         }
         return buildsFor(account, region).values().stream()
@@ -546,11 +543,11 @@ public class CodeBuildService {
                 .toList();
     }
 
-    private boolean descendingBuildList(String sortOrder) {
+    private boolean isDescendingSortOrder(String sortOrder, boolean defaultDescending) {
         if (sortOrder != null && !"ASCENDING".equals(sortOrder) && !"DESCENDING".equals(sortOrder)) {
             throw new AwsException("InvalidInputException", "Invalid sortOrder: " + sortOrder, 400);
         }
-        return !"ASCENDING".equals(sortOrder);
+        return sortOrder == null ? defaultDescending : "DESCENDING".equals(sortOrder);
     }
 
     public void stopBuild(String region, String account, String buildId) {
