@@ -3,10 +3,12 @@ package io.github.hectorvent.floci.services.wafv2;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.github.hectorvent.floci.core.common.AwsArnUtils;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.AwsPartition;
 import io.github.hectorvent.floci.core.common.AwsPartitions;
 import io.github.hectorvent.floci.core.common.RegionResolver;
+import io.github.hectorvent.floci.core.storage.AccountAwareStorageBackend;
 import io.github.hectorvent.floci.core.storage.StorageBackend;
 import io.github.hectorvent.floci.core.storage.StorageFactory;
 import io.github.hectorvent.floci.services.wafv2.model.IpSet;
@@ -274,11 +276,8 @@ public class WafV2Service {
     // ──────────────────────────── Association ────────────────────────────
 
     public void associateWebAcl(String webAclArn, String resourceArn) {
-        boolean known = webAclStore.scan(k -> true).stream()
-                .anyMatch(a -> a.getArn().equals(webAclArn));
-        if (!known) {
-            throw new AwsException("WAFNonexistentItemException",
-                    "AWS WAF couldn't perform the operation because your resource doesn't exist.", 400);
+        if (scanArn(webAclStore, webAclArn) == null) {
+            throw nonexistentItem();
         }
         associationStore.put(resourceArn, webAclArn);
     }
@@ -311,8 +310,7 @@ public class WafV2Service {
 
     public String putLoggingConfiguration(String resourceArn, String loggingConfigJson) {
         if (scanArn(webAclStore, resourceArn) == null) {
-            throw new AwsException("WAFNonexistentItemException",
-                    "AWS WAF couldn't perform the operation because your resource doesn't exist.", 400);
+            throw nonexistentItem();
         }
         loggingStore.put(resourceArn, loggingConfigJson);
         return loggingConfigJson;
@@ -420,10 +418,36 @@ public class WafV2Service {
         }
     }
 
+    @SuppressWarnings("unchecked")
     private <V> V scanArn(StorageBackend<String, V> store, String arn) {
-        return store.scan(k -> true).stream()
+        V found = store.scan(k -> true).stream()
                 .filter(v -> arn.equals(arnOf(v)))
                 .findFirst().orElse(null);
+        if (found != null || !(store instanceof AccountAwareStorageBackend<?> accountStore)
+                || !AwsArnUtils.isArnFor(arn, "wafv2")) {
+            return found;
+        }
+        AwsArnUtils.Arn parsed = AwsArnUtils.parse(arn);
+        if (!parsed.accountId().equals(regionResolver.getAccountId())) {
+            return null;
+        }
+        String[] resource = parsed.resource().split("/", -1);
+        if (resource.length != 4 || resource[3].isBlank()) {
+            return null;
+        }
+        String scope = switch (resource[0]) {
+            case "regional" -> "REGIONAL";
+            case "global" -> "CLOUDFRONT";
+            default -> null;
+        };
+        if (scope == null) {
+            return null;
+        }
+        AccountAwareStorageBackend<V> awareStore = (AccountAwareStorageBackend<V>) accountStore;
+        return awareStore.getForAccountMigratingLegacy(parsed.accountId(), key(scope, resource[3]),
+                        value -> arn.equals(arnOf(value)))
+                .filter(value -> arn.equals(arnOf(value)))
+                .orElse(null);
     }
 
     private String arnOf(Object v) {
@@ -442,14 +466,16 @@ public class WafV2Service {
         if (name == null || name.isBlank()) {
             throw new AwsException("WAFInvalidParameterException", "Name is required.", 400);
         }
-        V resource = store.get(key(scope, id)).orElseThrow(() -> new AwsException(
-                "WAFNonexistentItemException",
-                "AWS WAF couldn't perform the operation because your resource doesn't exist.", 400));
+        V resource = store.get(key(scope, id)).orElseThrow(WafV2Service::nonexistentItem);
         if (!name.equals(nameOf(resource))) {
-            throw new AwsException("WAFNonexistentItemException",
-                    "AWS WAF couldn't perform the operation because your resource doesn't exist.", 400);
+            throw nonexistentItem();
         }
         return resource;
+    }
+
+    private static AwsException nonexistentItem() {
+        return new AwsException("WAFNonexistentItemException",
+                "AWS WAF couldn't perform the operation because your resource doesn't exist.", 400);
     }
 
     private <V> V findByName(StorageBackend<String, V> store, String scope, String name) {
