@@ -310,6 +310,10 @@ public class WafV2Service {
     // ──────────────────────────── Logging ────────────────────────────
 
     public String putLoggingConfiguration(String resourceArn, String loggingConfigJson) {
+        if (scanArn(webAclStore, resourceArn) == null) {
+            throw new AwsException("WAFNonexistentItemException",
+                    "AWS WAF couldn't perform the operation because your resource doesn't exist.", 400);
+        }
         loggingStore.put(resourceArn, loggingConfigJson);
         return loggingConfigJson;
     }
