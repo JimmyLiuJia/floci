@@ -812,6 +812,13 @@ Lambda. floci supports two shapes:
   ResponseURL callback fires. The wait is bounded by an async custom-resource timeout (3 minutes by
   default); a resource that never completes fails the stack rather than hanging.
 
+Some packaged Node.js custom-resource handlers send their callback over HTTPS on port 443 even when
+`ResponseURL` uses HTTP on port 4566. For these handlers, start floci with `FLOCI_TLS_ENABLED=true`
+and ensure its HTTPS listener can bind port 443. Lambda containers launched by floci then trust its
+local CA; with the default HTTP-only setup, the callback is refused and the stack times out. Inline
+`ZipFile` handlers using floci's bundled `cfn-response` follow the URL's scheme and port instead.
+See [TLS / HTTPS](../configuration/tls.md) for TLS setup.
+
 The handler's `Data` keys resolve through `Fn::GetAtt`, except keys that begin with `__Floci`. Floci
 reserves that prefix for its own resource state and ignores such keys.
 
