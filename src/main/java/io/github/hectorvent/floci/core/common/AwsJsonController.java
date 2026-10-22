@@ -207,15 +207,15 @@ public class AwsJsonController {
         }
         if ("sqs".equals(serviceKey) && response.getEntity() != null
                 && !(response.getEntity() instanceof byte[])) {
-            try {
-                return Response.fromResponse(response)
-                        .entity(objectMapper.writeValueAsBytes(response.getEntity()))
-                        .type(CONTENT_TYPE_AWS_JSON_1_0)
-                        .build();
-            } catch (JsonProcessingException e) {
-                LOG.error("Failed to serialize SQS JSON response", e);
-                return JsonErrorResponseUtils.createErrorResponse(e);
+            byte[] bodyBytes = JsonResponseBytes.serializeOrNull(response.getEntity(), objectMapper,
+                    LOG, "Failed to serialize SQS JSON response");
+            if (bodyBytes == null) {
+                return response;
             }
+            return Response.fromResponse(response)
+                    .entity(bodyBytes)
+                    .type(CONTENT_TYPE_AWS_JSON_1_0)
+                    .build();
         }
         return response;
     }
