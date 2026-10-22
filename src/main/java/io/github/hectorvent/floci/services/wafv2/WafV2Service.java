@@ -3,12 +3,10 @@ package io.github.hectorvent.floci.services.wafv2;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import io.github.hectorvent.floci.core.common.AwsArnUtils;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.AwsPartition;
 import io.github.hectorvent.floci.core.common.AwsPartitions;
 import io.github.hectorvent.floci.core.common.RegionResolver;
-import io.github.hectorvent.floci.core.storage.AccountAwareStorageBackend;
 import io.github.hectorvent.floci.core.storage.StorageBackend;
 import io.github.hectorvent.floci.core.storage.StorageFactory;
 import io.github.hectorvent.floci.services.wafv2.model.IpSet;
@@ -418,36 +416,10 @@ public class WafV2Service {
         }
     }
 
-    @SuppressWarnings("unchecked")
     private <V> V scanArn(StorageBackend<String, V> store, String arn) {
-        V found = store.scan(k -> true).stream()
+        return store.scan(k -> true).stream()
                 .filter(v -> arn.equals(arnOf(v)))
                 .findFirst().orElse(null);
-        if (found != null || !(store instanceof AccountAwareStorageBackend<?> accountStore)
-                || !AwsArnUtils.isArnFor(arn, "wafv2")) {
-            return found;
-        }
-        AwsArnUtils.Arn parsed = AwsArnUtils.parse(arn);
-        if (!parsed.accountId().equals(regionResolver.getAccountId())) {
-            return null;
-        }
-        String[] resource = parsed.resource().split("/", -1);
-        if (resource.length != 4 || resource[3].isBlank()) {
-            return null;
-        }
-        String scope = switch (resource[0]) {
-            case "regional" -> "REGIONAL";
-            case "global" -> "CLOUDFRONT";
-            default -> null;
-        };
-        if (scope == null) {
-            return null;
-        }
-        AccountAwareStorageBackend<V> awareStore = (AccountAwareStorageBackend<V>) accountStore;
-        return awareStore.getForAccountMigratingLegacy(parsed.accountId(), key(scope, resource[3]),
-                        value -> arn.equals(arnOf(value)))
-                .filter(value -> arn.equals(arnOf(value)))
-                .orElse(null);
     }
 
     private String arnOf(Object v) {
