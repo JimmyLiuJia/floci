@@ -1860,6 +1860,12 @@ public class ElastiCacheService implements ResourceProvider {
 
     public ElastiCacheUser createUser(String userId, String userName, AuthMode authMode,
                                       List<String> passwords, String accessString, String engine) {
+        return createUser(userId, userName, authMode, passwords, accessString, engine, Map.of());
+    }
+
+    public ElastiCacheUser createUser(String userId, String userName, AuthMode authMode,
+                                      List<String> passwords, String accessString, String engine,
+                                      Map<String, String> tags) {
         if (users.get(userId).isPresent()) {
             throw new AwsException("UserAlreadyExists",
                     "User " + userId + " already exists.", 400);
@@ -1874,11 +1880,103 @@ public class ElastiCacheService implements ResourceProvider {
                 accessString != null ? accessString : "on ~* +@all",
                 normalizedEngine, "active", Instant.now());
         user.setArn(regionResolver.buildArn("elasticache", regionResolver.getRegion(), "user:" + userId));
+        user.setTags(tags);
 
         users.put(userId, user);
         LOG.infov("ElastiCache user {0} created with authMode={1}", userId, authMode);
         return user;
     }
+
+    public Map<String, String> addTagsToResource(String resourceArn, Map<String, String> tags,
+                                                  String region) {
+        TagResourceRef ref = parseTagResourceArn(resourceArn, region);
+        return switch (ref.type()) {
+            case "user" -> updateUserTags(ref.id(), tags);
+            case "usergroup" -> updateUserGroupTags(ref.id(), tags);
+            case "replicationgroup" -> updateReplicationGroupTags(ref.id(), tags);
+            default -> throw invalidTagResource(resourceArn);
+        };
+    }
+
+    public Map<String, String> removeTagsFromResource(String resourceArn, List<String> tagKeys,
+                                                       String region) {
+        TagResourceRef ref = parseTagResourceArn(resourceArn, region);
+        return switch (ref.type()) {
+            case "user" -> removeUserTags(ref.id(), tagKeys);
+            case "usergroup" -> removeUserGroupTags(ref.id(), tagKeys);
+            case "replicationgroup" -> removeReplicationGroupTags(ref.id(), tagKeys);
+            default -> throw invalidTagResource(resourceArn);
+        };
+    }
+
+    private Map<String, String> updateUserTags(String userId, Map<String, String> tags) {
+        ElastiCacheUser user = getUser(userId);
+        user.getTags().putAll(tags);
+        users.put(userId, user);
+        return new LinkedHashMap<>(user.getTags());
+    }
+
+    private Map<String, String> removeUserTags(String userId, List<String> tagKeys) {
+        ElastiCacheUser user = getUser(userId);
+        tagKeys.forEach(user.getTags()::remove);
+        users.put(userId, user);
+        return new LinkedHashMap<>(user.getTags());
+    }
+
+    private Map<String, String> updateUserGroupTags(String userGroupId, Map<String, String> tags) {
+        ElastiCacheUserGroup userGroup = getUserGroup(userGroupId);
+        userGroup.getTags().putAll(tags);
+        userGroups.put(userGroup.getUserGroupId(), userGroup);
+        return new LinkedHashMap<>(userGroup.getTags());
+    }
+
+    private Map<String, String> removeUserGroupTags(String userGroupId, List<String> tagKeys) {
+        ElastiCacheUserGroup userGroup = getUserGroup(userGroupId);
+        tagKeys.forEach(userGroup.getTags()::remove);
+        userGroups.put(userGroup.getUserGroupId(), userGroup);
+        return new LinkedHashMap<>(userGroup.getTags());
+    }
+
+    private Map<String, String> updateReplicationGroupTags(String groupId, Map<String, String> tags) {
+        ReplicationGroup group = getReplicationGroup(groupId);
+        group.getTags().putAll(tags);
+        groups.put(groupId, group);
+        return new LinkedHashMap<>(group.getTags());
+    }
+
+    private Map<String, String> removeReplicationGroupTags(String groupId, List<String> tagKeys) {
+        ReplicationGroup group = getReplicationGroup(groupId);
+        tagKeys.forEach(group.getTags()::remove);
+        groups.put(groupId, group);
+        return new LinkedHashMap<>(group.getTags());
+    }
+
+    private TagResourceRef parseTagResourceArn(String resourceArn, String region) {
+        AwsArnUtils.Arn arn;
+        try {
+            arn = AwsArnUtils.parse(resourceArn);
+        } catch (IllegalArgumentException e) {
+            throw invalidTagResource(resourceArn);
+        }
+        if (!"elasticache".equals(arn.service())
+                || !regionResolver.getPartition().equals(arn.partition())
+                || !region.equals(arn.region())
+                || !regionResolver.getAccountId().equals(arn.accountId())) {
+            throw invalidTagResource(resourceArn);
+        }
+        int separator = arn.resource().indexOf(':');
+        if (separator <= 0 || separator == arn.resource().length() - 1) {
+            throw invalidTagResource(resourceArn);
+        }
+        return new TagResourceRef(arn.resource().substring(0, separator),
+                arn.resource().substring(separator + 1));
+    }
+
+    private static AwsException invalidTagResource(String resourceArn) {
+        return new AwsException("InvalidARNFault", "Invalid resource ARN: " + resourceArn, 400);
+    }
+
+    private record TagResourceRef(String type, String id) {}
 
     public ElastiCacheUser getUser(String userId) {
         return users.get(userId).orElseThrow(() ->
@@ -1970,6 +2068,11 @@ public class ElastiCacheService implements ResourceProvider {
 
     public ElastiCacheUserGroup createUserGroup(String userGroupId, String engine, List<String> userIds,
                                                 String region) {
+        return createUserGroup(userGroupId, engine, userIds, region, Map.of());
+    }
+
+    public ElastiCacheUserGroup createUserGroup(String userGroupId, String engine, List<String> userIds,
+                                                String region, Map<String, String> tags) {
         String id = normalizeUserGroupId(userGroupId);
         // Engine is required on AWS; a missing value defaults to redis as CreateUser does.
         String normalizedEngine = (engine == null || engine.isBlank()) ? "redis" : normalizeEngine(engine);
@@ -1983,6 +2086,7 @@ public class ElastiCacheService implements ResourceProvider {
             ElastiCacheUserGroup userGroup = new ElastiCacheUserGroup(
                     id, normalizedEngine, members, "active", Instant.now());
             userGroup.setArn(regionResolver.buildArn("elasticache", region, "usergroup:" + id));
+            userGroup.setTags(tags);
             userGroups.put(id, userGroup);
             LOG.infov("ElastiCache user group {0} created with {1} users", id, members.size());
             return userGroup;

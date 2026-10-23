@@ -74,6 +74,29 @@ class ElastiCacheQueryHandlerTest {
     }
 
     @Test
+    void addTagsToResource_supportsUserResource() {
+        MultivaluedMap<String, String> p = params();
+        p.add("ResourceName", "arn:aws:elasticache:us-east-1:000000000000:user:sub1");
+        p.add("Tags.Tag.1.Key", "env");
+        p.add("Tags.Tag.1.Value", "test");
+
+        Response response = handler.handle("AddTagsToResource", p, "us-east-1");
+
+        assertEquals(200, response.getStatus(), (String) response.getEntity());
+    }
+
+    @Test
+    void removeTagsFromResource_supportsUserResource() {
+        MultivaluedMap<String, String> p = params();
+        p.add("ResourceName", "arn:aws:elasticache:us-east-1:000000000000:user:sub1");
+        p.add("TagKeys.member.1", "env");
+
+        Response response = handler.handle("RemoveTagsFromResource", p, "us-east-1");
+
+        assertEquals(200, response.getStatus(), (String) response.getEntity());
+    }
+
+    @Test
     void describeReplicationGroups_reportsClusterModeTopology() {
         ReplicationGroup group = new ReplicationGroup("grp", "d", ReplicationGroupStatus.AVAILABLE,
                 AuthMode.NO_AUTH, new Endpoint("localhost", 6379), Instant.now(), 6379);

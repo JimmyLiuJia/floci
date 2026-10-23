@@ -151,6 +151,29 @@ class ElastiCacheServiceTest {
     }
 
     @Test
+    void userAndUserGroupTagsPersistAndCanBeMutatedByArn() {
+        ElastiCacheUser defaultUser = service.createUser("default-user", "default", AuthMode.PASSWORD,
+                List.of("password"), "on ~* +@all", "redis");
+        ElastiCacheUser taggedUser = service.createUser("tagged-user", "tagged", AuthMode.PASSWORD,
+                List.of("password"), "on ~* +@all", "redis", Map.of("owner", "platform"));
+        assertEquals(Map.of("owner", "platform"), taggedUser.getTags());
+
+        ElastiCacheUserGroup taggedGroup = service.createUserGroup("tagged-group", "redis",
+                List.of(defaultUser.getUserId()), "us-east-1", Map.of("team", "cache"));
+        assertEquals(Map.of("team", "cache"), taggedGroup.getTags());
+
+        service.addTagsToResource(taggedUser.getArn(), Map.of("environment", "test"), "us-east-1");
+        assertEquals(Map.of("owner", "platform", "environment", "test"),
+                service.getUser("tagged-user").getTags());
+        service.removeTagsFromResource(taggedUser.getArn(), List.of("owner"), "us-east-1");
+        assertEquals(Map.of("environment", "test"), service.getUser("tagged-user").getTags());
+
+        service.addTagsToResource(taggedGroup.getArn(), Map.of("environment", "test"), "us-east-1");
+        assertEquals(Map.of("team", "cache", "environment", "test"),
+                service.getUserGroup("tagged-group").getTags());
+    }
+
+    @Test
     void singleArgAuthMatchesDefaultUserOnly() {
         service.createReplicationGroup("grp", "test", AuthMode.PASSWORD, null, "us-east-1");
 

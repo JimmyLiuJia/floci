@@ -93,6 +93,8 @@ public class ElastiCacheQueryHandler {
             case "ModifyCacheParameterGroup" -> handleModifyCacheParameterGroup(params);
             case "DescribeCacheParameters" -> handleDescribeCacheParameters(params);
             case "DeleteCacheParameterGroup" -> handleDeleteCacheParameterGroup(params);
+            case "AddTagsToResource" -> handleAddTagsToResource(params, region);
+            case "RemoveTagsFromResource" -> handleRemoveTagsFromResource(params, region);
             case "ListTagsForResource" -> handleListTagsForResource(params);
             default -> AwsQueryResponse.error("UnsupportedOperation",
                     "Operation " + action + " is not supported.", AwsNamespaces.EC, 400);
@@ -276,7 +278,8 @@ public class ElastiCacheQueryHandler {
             UserAuthentication auth = resolveUserAuthentication(params);
             AuthMode authMode = auth != null ? auth.mode() : AuthMode.NO_AUTH;
             List<String> passwords = auth != null ? auth.passwords() : List.of();
-            ElastiCacheUser user = service.createUser(userId, userName, authMode, passwords, accessString, engine);
+            ElastiCacheUser user = service.createUser(userId, userName, authMode, passwords, accessString, engine,
+                    parseTags(params));
             return Response.ok(AwsQueryResponse.envelope("CreateUser", AwsNamespaces.EC, userXml(user))).build();
         } catch (AwsException e) {
             return AwsQueryResponse.error(e.getErrorCode(), e.getMessage(), AwsNamespaces.EC, e.getHttpStatus());
@@ -342,7 +345,8 @@ public class ElastiCacheQueryHandler {
     private Response handleCreateUserGroup(MultivaluedMap<String, String> params, String region) {
         try {
             ElastiCacheUserGroup userGroup = service.createUserGroup(params.getFirst("UserGroupId"),
-                    params.getFirst("Engine"), extractMemberList(params, "UserIds.member."), region);
+                    params.getFirst("Engine"), extractMemberList(params, "UserIds.member."), region,
+                    parseTags(params));
             return Response.ok(AwsQueryResponse.envelope("CreateUserGroup", AwsNamespaces.EC,
                     userGroupXml(userGroup))).build();
         } catch (AwsException e) {
@@ -817,6 +821,20 @@ private Response handleCreateCacheParameterGroup(MultivaluedMap<String, String> 
                                 arn[6] + " is not present", 404))
                         .getTags();
             }
+            if ("user".equals(arn[5])) {
+                ElastiCacheUser user = service.getUser(arn[6]);
+                if (user.getArn() != null && !user.getArn().equalsIgnoreCase(resourceName)) {
+                    throw new AwsException("UserNotFound", "User " + arn[6] + " not found.", 404);
+                }
+                tags = user.getTags();
+            }
+            if ("usergroup".equals(arn[5])) {
+                ElastiCacheUserGroup userGroup = service.getUserGroup(arn[6]);
+                if (userGroup.getArn() != null && !userGroup.getArn().equalsIgnoreCase(resourceName)) {
+                    throw new AwsException("UserGroupNotFound", "User group " + arn[6] + " not found.", 404);
+                }
+                tags = userGroup.getTags();
+            }
             XmlBuilder xml = new XmlBuilder().start("TagList");
             tags.forEach((key, value) -> xml.start("Tag")
                     .elem("Key", key)
@@ -827,6 +845,37 @@ private Response handleCreateCacheParameterGroup(MultivaluedMap<String, String> 
         } catch (AwsException e) {
             return AwsQueryResponse.error(e.getErrorCode(), e.getMessage(), AwsNamespaces.EC, e.getHttpStatus());
         }
+    }
+
+    private Response handleAddTagsToResource(MultivaluedMap<String, String> params, String region) {
+        try {
+            Map<String, String> tags = service.addTagsToResource(params.getFirst("ResourceName"),
+                    parseTags(params), region);
+            return Response.ok(AwsQueryResponse.envelope("AddTagsToResource", AwsNamespaces.EC,
+                    tagListXml(tags))).build();
+        } catch (AwsException e) {
+            return AwsQueryResponse.error(e.getErrorCode(), e.getMessage(), AwsNamespaces.EC, e.getHttpStatus());
+        }
+    }
+
+    private Response handleRemoveTagsFromResource(MultivaluedMap<String, String> params, String region) {
+        try {
+            Map<String, String> tags = service.removeTagsFromResource(params.getFirst("ResourceName"),
+                    extractMemberList(params, "TagKeys.member."), region);
+            return Response.ok(AwsQueryResponse.envelope("RemoveTagsFromResource", AwsNamespaces.EC,
+                    tagListXml(tags))).build();
+        } catch (AwsException e) {
+            return AwsQueryResponse.error(e.getErrorCode(), e.getMessage(), AwsNamespaces.EC, e.getHttpStatus());
+        }
+    }
+
+    private static String tagListXml(Map<String, String> tags) {
+        XmlBuilder xml = new XmlBuilder().start("TagList");
+        tags.forEach((key, value) -> xml.start("Tag")
+                .elem("Key", key)
+                .elem("Value", value)
+                .end("Tag"));
+        return xml.end("TagList").build();
     }
 
     private Response handleDeleteCacheParameterGroup(MultivaluedMap<String, String> params) {
