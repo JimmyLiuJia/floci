@@ -550,6 +550,7 @@ public class EventBridgeService implements ResourceProvider {
     // ──────────────────────────── Tags ────────────────────────────
 
     public Map<String, String> listTagsForResource(String resourceArn, String region) {
+        validateTagResourceArn(resourceArn, region);
         String resource = AwsArnUtils.parse(resourceArn).resource();
         if (resource.startsWith("event-bus/")) {
             String busName = resource.substring("event-bus/".length());
@@ -575,6 +576,24 @@ public class EventBridgeService implements ResourceProvider {
         return Map.of();
     }
 
+    /** EventBridge tag operations only address resources in the caller's account and Region. */
+    private void validateTagResourceArn(String resourceArn, String region) {
+        AwsArnUtils.Arn arn;
+        try {
+            arn = AwsArnUtils.parse(resourceArn);
+        } catch (IllegalArgumentException e) {
+            throw new AwsException("ResourceNotFoundException",
+                    "Resource not found: " + resourceArn, 400);
+        }
+        if (!"events".equals(arn.service())
+                || !regionResolver.getPartition().equals(arn.partition())
+                || !region.equals(arn.region())
+                || !regionResolver.getAccountId().equals(arn.accountId())) {
+            throw new AwsException("ResourceNotFoundException",
+                    "Resource not found: " + resourceArn, 400);
+        }
+    }
+
     /** Resolves the bus and rule name from a {@code rule/...} ARN resource segment. */
     private record RuleRef(String busName, String ruleName) {}
 
@@ -590,6 +609,7 @@ public class EventBridgeService implements ResourceProvider {
     }
 
     public void tagResource(String resourceArn, Map<String, String> tags, String region) {
+        validateTagResourceArn(resourceArn, region);
         String resource = AwsArnUtils.parse(resourceArn).resource();
         if (resource.startsWith("archive/")) {
             String archiveName = resource.substring("archive/".length());
@@ -628,6 +648,7 @@ public class EventBridgeService implements ResourceProvider {
     }
 
     public void untagResource(String resourceArn, List<String> tagKeys, String region) {
+        validateTagResourceArn(resourceArn, region);
         String resource = AwsArnUtils.parse(resourceArn).resource();
         if (resource.startsWith("archive/")) {
             String archiveName = resource.substring("archive/".length());

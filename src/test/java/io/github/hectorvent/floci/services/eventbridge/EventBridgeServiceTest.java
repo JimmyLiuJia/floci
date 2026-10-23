@@ -116,6 +116,42 @@ class EventBridgeServiceTest {
     }
 
     @Test
+    void tagResourceRejectsArnFromAnotherAccount() {
+        EventBus bus = service.createEventBus("owned-bus", null, null, REGION);
+        String foreignAccountArn = bus.getArn().replace(":000000000000:", ":111111111111:");
+
+        AwsException error = assertThrows(AwsException.class, () ->
+                service.tagResource(foreignAccountArn, Map.of("env", "test"), REGION));
+
+        assertEquals("ResourceNotFoundException", error.getErrorCode());
+        assertTrue(service.listTagsForResource(bus.getArn(), REGION).isEmpty());
+    }
+
+    @Test
+    void tagResourceRejectsArnFromAnotherRegion() {
+        EventBus bus = service.createEventBus("owned-bus", null, null, REGION);
+        String foreignRegionArn = bus.getArn().replace(":us-east-1:", ":eu-west-1:");
+
+        AwsException error = assertThrows(AwsException.class, () ->
+                service.tagResource(foreignRegionArn, Map.of("env", "test"), REGION));
+
+        assertEquals("ResourceNotFoundException", error.getErrorCode());
+        assertTrue(service.listTagsForResource(bus.getArn(), REGION).isEmpty());
+    }
+
+    @Test
+    void listTagsForResourceRejectsArnFromAnotherAccount() {
+        EventBus bus = service.createEventBus("owned-bus", null, null, REGION);
+        service.tagResource(bus.getArn(), Map.of("env", "test"), REGION);
+        String foreignAccountArn = bus.getArn().replace(":000000000000:", ":111111111111:");
+
+        AwsException error = assertThrows(AwsException.class, () ->
+                service.listTagsForResource(foreignAccountArn, REGION));
+
+        assertEquals("ResourceNotFoundException", error.getErrorCode());
+    }
+
+    @Test
     void createEventBusBlankNameThrows() {
         assertThrows(AwsException.class, () ->
                 service.createEventBus("", null, null, REGION));
