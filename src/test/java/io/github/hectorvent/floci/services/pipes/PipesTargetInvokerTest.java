@@ -254,6 +254,40 @@ class PipesTargetInvokerTest {
         assertFalse(ingestionTime.isAfter(after));
     }
 
+    @Test
+    void extractJsonPath_messageAttributeJsonLookingStringRemainsString() throws Exception {
+        String result = invoker.extractJsonPath("$.messageAttributes.traceId.stringValue",
+                "{\"messageAttributes\":{\"traceId\":{\"stringValue\":\"{\\\"nested\\\":true}\"}}}");
+
+        JsonNode value = MAPPER.readTree(result);
+        assertTrue(value.isTextual());
+        assertEquals("{\"nested\":true}", value.asText());
+    }
+
+    @Test
+    void extractJsonPath_nestedBodyValueRemainsString() throws Exception {
+        ObjectNode body = MAPPER.createObjectNode();
+        body.put("Message", "{\"role\":\"admin\"}");
+        ObjectNode payload = MAPPER.createObjectNode();
+        payload.put("body", body.toString());
+        String result = invoker.extractJsonPath("$.body.Message",
+                payload.toString());
+
+        JsonNode value = MAPPER.readTree(result);
+        assertTrue(value.isTextual());
+        assertEquals("{\"role\":\"admin\"}", value.asText());
+    }
+
+    @Test
+    void inputTemplate_reusesIngestionTimeForRepeatedPlaceholders() throws Exception {
+        String result = invoker.applyInputTemplate(
+                "{\"first\": <aws.pipes.event.ingestion-time>, "
+                        + "\"second\": <aws.pipes.event.ingestion-time>}", "{}");
+
+        JsonNode document = MAPPER.readTree(result);
+        assertEquals(document.path("first").asText(), document.path("second").asText());
+    }
+
     // ──────────────────────────── nested JSON string resolution ────────────────────────────
 
     @Test

@@ -219,12 +219,13 @@ public class PipesTargetInvoker {
 
     String applyInputTemplate(String template, String payload) {
         Matcher m = TEMPLATE_PLACEHOLDER.matcher(template);
+        String ingestionTime = objectMapper.valueToTree(Instant.now().toString()).toString();
         StringBuilder sb = new StringBuilder();
         while (m.find()) {
             String jsonPath = m.group(1);
             boolean quoted = isInsideJsonString(template, m.start());
             String value = "aws.pipes.event.ingestion-time".equals(jsonPath)
-                    ? objectMapper.valueToTree(Instant.now().toString()).toString()
+                    ? ingestionTime
                     : extractJsonPath(jsonPath, payload);
             if (value == null) {
                 value = quoted ? "" : objectMapper.valueToTree("").toString();
@@ -285,11 +286,15 @@ public class PipesTargetInvoker {
             }
 
             JsonNode current = objectMapper.readTree(json);
+            String previousSegment = null;
             for (String segment : segments) {
-                // AWS Pipes auto-parses string fields containing valid JSON
-                if (current.isTextual()) {
+                // AWS Pipes parses an encoded source body when traversing into it.
+                if (isEncodedSourceField(previousSegment) && current.isTextual()) {
                     try {
-                        current = objectMapper.readTree(current.asText());
+                        JsonNode decoded = objectMapper.readTree(current.asText());
+                        if (decoded != null && (decoded.isObject() || decoded.isArray())) {
+                            current = decoded;
+                        }
                     } catch (Exception ignored) {
                         return null;
                     }
@@ -302,8 +307,9 @@ public class PipesTargetInvoker {
                 if (current.isMissingNode() || current.isNull()) {
                     return null;
                 }
+                previousSegment = segment;
             }
-            if (current.isTextual()) {
+            if (isEncodedSourceField(previousSegment) && current.isTextual()) {
                 // SQS bodies commonly contain a JSON document as a string. Pipes input
                 // transformation resolves that document when the body itself is selected.
                 try {
@@ -323,6 +329,11 @@ public class PipesTargetInvoker {
             LOG.warnv("Failed to extract JSONPath {0}: {1}", jsonPath, e.getMessage());
             return null;
         }
+    }
+
+    private static boolean isEncodedSourceField(String segment) {
+        return "body".equals(segment) || "data".equals(segment)
+                || "key".equals(segment) || "value".equals(segment);
     }
 
     private static String extractRegionFromArn(String arn, String defaultRegion) {
