@@ -5451,6 +5451,13 @@ public class S3Service implements Resettable, ResourceProvider {
         return bucket.getPolicy();
     }
 
+    /** Returns whether the bucket policy grants public access according to S3 policy-status rules. */
+    public boolean isBucketPolicyPublic(String bucketName) {
+        Bucket bucket = resolveBucket(bucketName)
+                .orElseThrow(() -> new AwsException("NoSuchBucket", "The specified bucket does not exist.", 404));
+        return S3PublicAccessEvaluator.policyIsPublic(objectMapper, bucket.getPolicy());
+    }
+
     /**
      * {@code BlockPublicPolicy} rejects a bucket policy that grants public access. As on AWS the
      * check runs whoever the caller is, so it does not sit behind {@code enforce-auth}, and it
