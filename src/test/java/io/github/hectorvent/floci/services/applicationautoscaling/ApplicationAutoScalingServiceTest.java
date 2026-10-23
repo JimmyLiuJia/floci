@@ -1,6 +1,7 @@
 package io.github.hectorvent.floci.services.applicationautoscaling;
 
 import io.github.hectorvent.floci.core.common.AwsException;
+import io.github.hectorvent.floci.core.common.PaginatedResult;
 import io.github.hectorvent.floci.core.common.RegionResolver;
 import io.github.hectorvent.floci.core.storage.InMemoryStorage;
 import io.github.hectorvent.floci.services.applicationautoscaling.model.PredefinedMetricSpecification;
@@ -148,6 +149,63 @@ class ApplicationAutoScalingServiceTest {
         assertEquals(2, service.describeScalableTargets(NAMESPACE, null, null, REGION).size());
         assertEquals(1, service.describeScalableTargets(NAMESPACE, List.of(RESOURCE_ID), DIMENSION, REGION).size());
         assertEquals(0, service.describeScalableTargets("kafka", null, null, REGION).size());
+    }
+
+    @Test
+    void describeScalableTargetsHonorsMaxResultsAndNextToken() {
+        service.registerScalableTarget(NAMESPACE, "service/a/one", DIMENSION, 1, 10,
+                null, null, Map.of(), REGION);
+        service.registerScalableTarget(NAMESPACE, "service/a/two", DIMENSION, 1, 10,
+                null, null, Map.of(), REGION);
+
+        PaginatedResult<ScalableTarget> first = service.describeScalableTargets(
+                NAMESPACE, null, null, 1, null, REGION);
+
+        assertEquals(1, first.items().size());
+        assertNotNull(first.nextToken());
+
+        PaginatedResult<ScalableTarget> second = service.describeScalableTargets(
+                NAMESPACE, null, null, 1, first.nextToken(), REGION);
+
+        assertEquals(1, second.items().size());
+        assertNull(second.nextToken());
+        assertTrue(!first.items().getFirst().getResourceId()
+                .equals(second.items().getFirst().getResourceId()));
+    }
+
+    @Test
+    void describeScalingPoliciesHonorsMaxResultsAndNextToken() {
+        register();
+        service.putScalingPolicy("policy-a", "StepScaling", NAMESPACE, RESOURCE_ID, DIMENSION,
+                null, null, REGION);
+        service.putScalingPolicy("policy-b", "StepScaling", NAMESPACE, RESOURCE_ID, DIMENSION,
+                null, null, REGION);
+
+        PaginatedResult<ScalingPolicy> first = service.describeScalingPolicies(
+                NAMESPACE, RESOURCE_ID, DIMENSION, null, 1, null, REGION);
+
+        assertEquals(1, first.items().size());
+        assertNotNull(first.nextToken());
+
+        PaginatedResult<ScalingPolicy> second = service.describeScalingPolicies(
+                NAMESPACE, RESOURCE_ID, DIMENSION, null, 1, first.nextToken(), REGION);
+
+        assertEquals(1, second.items().size());
+        assertNull(second.nextToken());
+        assertTrue(!first.items().getFirst().getPolicyName()
+                .equals(second.items().getFirst().getPolicyName()));
+    }
+
+    @Test
+    void describePaginationValidatesPageSizeAndToken() {
+        register();
+
+        assertThrows(AwsException.class, () -> service.describeScalableTargets(
+                NAMESPACE, null, null, 0, null, REGION));
+        assertThrows(AwsException.class, () -> service.describeScalableTargets(
+                NAMESPACE, null, null, 51, null, REGION));
+        assertThrows(AwsException.class, () -> service.describeScalableTargets(
+                NAMESPACE, null, null, null, "", REGION));
     }
 
     @Test

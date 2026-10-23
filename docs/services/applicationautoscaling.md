@@ -136,8 +136,6 @@ arn:aws:iam::<account>:role/aws-service-role/<namespace>.application-autoscaling
   implemented.
 - `PredictiveScalingPolicyConfiguration` is accepted only insofar as `PolicyType` is
   validated; the configuration block is not stored.
-- Pagination is not implemented — `DescribeScalableTargets` and `DescribeScalingPolicies`
-  return all matching results and never emit a `NextToken`.
 - **The evaluation range's exact width is an approximation.** Alarm evaluation follows
   CloudWatch's documented precedence: a wider "evaluation range" than
   `Period × EvaluationPeriods` is queried, and whenever enough *real* datapoints exist within

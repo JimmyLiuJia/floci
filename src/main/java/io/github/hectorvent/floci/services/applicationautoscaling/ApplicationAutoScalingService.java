@@ -2,6 +2,8 @@ package io.github.hectorvent.floci.services.applicationautoscaling;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import io.github.hectorvent.floci.core.common.AwsException;
+import io.github.hectorvent.floci.core.common.PaginatedResult;
+import io.github.hectorvent.floci.core.common.Pagination;
 import io.github.hectorvent.floci.core.common.RegionResolver;
 import io.github.hectorvent.floci.core.common.ServicePrincipals;
 import io.github.hectorvent.floci.core.storage.StorageBackend;
@@ -45,6 +47,7 @@ import java.util.UUID;
 public class ApplicationAutoScalingService {
 
     private static final Logger LOG = Logger.getLogger(ApplicationAutoScalingService.class);
+    private static final int MAX_PAGE_SIZE = 50;
 
     static final Set<String> SERVICE_NAMESPACES = Set.of(
             "ecs", "elasticmapreduce", "ec2", "appstream", "dynamodb", "rds", "sagemaker",
@@ -186,6 +189,18 @@ public class ApplicationAutoScalingService {
                 .toList();
     }
 
+    PaginatedResult<ScalableTarget> describeScalableTargets(String serviceNamespace, List<String> resourceIds,
+                                                            String scalableDimension, Integer maxResults,
+                                                            String nextToken, String region) {
+        validateNextToken(nextToken, "DescribeScalableTargets");
+        List<ScalableTarget> matching = describeScalableTargets(serviceNamespace, resourceIds,
+                scalableDimension, region);
+        return Pagination.paginate(matching, ApplicationAutoScalingService::scalableTargetCursor,
+                pageSize(maxResults), nextToken,
+                targetPageNamespace(region, serviceNamespace, resourceIds, scalableDimension),
+                token -> invalidNextToken("DescribeScalableTargets"));
+    }
+
     /**
      * Deregisters a scalable target and, per AWS semantics, deletes every scaling policy
      * attached to it along with the CloudWatch alarms those policies own.
@@ -275,8 +290,20 @@ public class ApplicationAutoScalingService {
                 .filter(p -> resourceId == null || resourceId.equals(p.getResourceId()))
                 .filter(p -> scalableDimension == null || scalableDimension.equals(p.getScalableDimension()))
                 .filter(p -> policyNames == null || policyNames.isEmpty() || policyNames.contains(p.getPolicyName()))
-                .sorted(Comparator.comparing(ScalingPolicy::getPolicyName))
+                .sorted(Comparator.comparing(ApplicationAutoScalingService::scalingPolicyCursor))
                 .toList();
+    }
+
+    PaginatedResult<ScalingPolicy> describeScalingPolicies(String serviceNamespace, String resourceId,
+                                                           String scalableDimension, List<String> policyNames,
+                                                           Integer maxResults, String nextToken, String region) {
+        validateNextToken(nextToken, "DescribeScalingPolicies");
+        List<ScalingPolicy> matching = describeScalingPolicies(serviceNamespace, resourceId,
+                scalableDimension, policyNames, region);
+        return Pagination.paginate(matching, ApplicationAutoScalingService::scalingPolicyCursor,
+                pageSize(maxResults), nextToken,
+                policyPageNamespace(region, serviceNamespace, resourceId, scalableDimension, policyNames),
+                token -> invalidNextToken("DescribeScalingPolicies"));
     }
 
     public void deleteScalingPolicy(String policyName, String serviceNamespace, String resourceId,
@@ -511,6 +538,48 @@ public class ApplicationAutoScalingService {
     private static double nowEpochSeconds() {
         Instant now = Instant.now();
         return now.getEpochSecond() + (now.getNano() / 1_000_000 / 1000.0d);
+    }
+
+    private static int pageSize(Integer maxResults) {
+        if (maxResults != null && (maxResults < 1 || maxResults > MAX_PAGE_SIZE)) {
+            throw new AwsException("ValidationException",
+                    "MaxResults must be between 1 and " + MAX_PAGE_SIZE + ".", 400);
+        }
+        return maxResults == null ? MAX_PAGE_SIZE : maxResults;
+    }
+
+    private static AwsException invalidNextToken(String operation) {
+        return new AwsException("ValidationException",
+                "Invalid NextToken for " + operation + ".", 400);
+    }
+
+    private static void validateNextToken(String nextToken, String operation) {
+        if (nextToken != null && nextToken.isEmpty()) {
+            throw invalidNextToken(operation);
+        }
+    }
+
+    private static String scalableTargetCursor(ScalableTarget target) {
+        return target.getResourceId() + "\u0000" + target.getScalableDimension();
+    }
+
+    private static String scalingPolicyCursor(ScalingPolicy policy) {
+        return policy.getPolicyName() + "\u0000" + policy.getResourceId()
+                + "\u0000" + policy.getScalableDimension();
+    }
+
+    private static String targetPageNamespace(String region, String serviceNamespace,
+                                              List<String> resourceIds, String scalableDimension) {
+        String ids = resourceIds == null ? "" : resourceIds.stream().sorted().toList().toString();
+        return "DescribeScalableTargets|" + region + "|" + serviceNamespace + "|" + ids
+                + "|" + scalableDimension;
+    }
+
+    private static String policyPageNamespace(String region, String serviceNamespace, String resourceId,
+                                              String scalableDimension, List<String> policyNames) {
+        String names = policyNames == null ? "" : policyNames.stream().sorted().toList().toString();
+        return "DescribeScalingPolicies|" + region + "|" + serviceNamespace + "|" + resourceId
+                + "|" + scalableDimension + "|" + names;
     }
 
     private static String targetKey(String region, String serviceNamespace, String resourceId,
