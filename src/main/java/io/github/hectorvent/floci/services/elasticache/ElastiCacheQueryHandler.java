@@ -849,10 +849,13 @@ private Response handleCreateCacheParameterGroup(MultivaluedMap<String, String> 
 
     private Response handleAddTagsToResource(MultivaluedMap<String, String> params, String region) {
         try {
-            Map<String, String> tags = service.addTagsToResource(params.getFirst("ResourceName"),
-                    parseTags(params), region);
+            String resourceArn = requiredResourceArn(params);
+            Map<String, String> tags = parseMutationTags(params);
+            Map<String, String> updated = isServerlessResource(resourceArn)
+                    ? serverlessHandler.addTagsToResource(resourceArn, tags, region)
+                    : service.addTagsToResource(resourceArn, tags, region);
             return Response.ok(AwsQueryResponse.envelope("AddTagsToResource", AwsNamespaces.EC,
-                    tagListXml(tags))).build();
+                    tagListXml(updated))).build();
         } catch (AwsException e) {
             return AwsQueryResponse.error(e.getErrorCode(), e.getMessage(), AwsNamespaces.EC, e.getHttpStatus());
         }
@@ -860,8 +863,14 @@ private Response handleCreateCacheParameterGroup(MultivaluedMap<String, String> 
 
     private Response handleRemoveTagsFromResource(MultivaluedMap<String, String> params, String region) {
         try {
-            Map<String, String> tags = service.removeTagsFromResource(params.getFirst("ResourceName"),
-                    extractMemberList(params, "TagKeys.member."), region);
+            String resourceArn = requiredResourceArn(params);
+            List<String> tagKeys = extractMemberList(params, "TagKeys.member.");
+            if (tagKeys.isEmpty() || tagKeys.stream().anyMatch(key -> key == null || key.isBlank())) {
+                throw new AwsException("InvalidParameterValue", "TagKeys must contain at least one key.", 400);
+            }
+            Map<String, String> tags = isServerlessResource(resourceArn)
+                    ? serverlessHandler.removeTagsFromResource(resourceArn, tagKeys, region)
+                    : service.removeTagsFromResource(resourceArn, tagKeys, region);
             return Response.ok(AwsQueryResponse.envelope("RemoveTagsFromResource", AwsNamespaces.EC,
                     tagListXml(tags))).build();
         } catch (AwsException e) {
@@ -876,6 +885,25 @@ private Response handleCreateCacheParameterGroup(MultivaluedMap<String, String> 
                 .elem("Value", value)
                 .end("Tag"));
         return xml.end("TagList").build();
+    }
+
+    private static String requiredResourceArn(MultivaluedMap<String, String> params) {
+        String resourceArn = params.getFirst("ResourceName");
+        if (resourceArn == null || resourceArn.isBlank()) {
+            throw new AwsException("InvalidParameterValue", "ResourceName is required.", 400);
+        }
+        return resourceArn;
+    }
+
+    private static boolean isServerlessResource(String resourceArn) {
+        try {
+            AwsArnUtils.Arn arn = AwsArnUtils.parse(resourceArn);
+            String resource = arn.resource();
+            int separator = resource.indexOf(':');
+            return separator > 0 && "serverlesscache".equals(resource.substring(0, separator));
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
     }
 
     private Response handleDeleteCacheParameterGroup(MultivaluedMap<String, String> params) {
@@ -924,6 +952,29 @@ private Response handleCreateCacheParameterGroup(MultivaluedMap<String, String> 
 
     private static Map<String, String> parseTags(MultivaluedMap<String, String> params) {
         return parsePairs(params, List.of("Tags.Tag", "Tags.member", "Tag"), "Key", "Value");
+    }
+
+    private static Map<String, String> parseMutationTags(MultivaluedMap<String, String> params) {
+        Map<String, String> tags = parseTags(params);
+        boolean memberPresent = false;
+        for (String prefix : List.of("Tags.Tag", "Tags.member", "Tag")) {
+            for (int index = 1; ; index++) {
+                String key = params.getFirst(prefix + "." + index + ".Key");
+                String value = params.getFirst(prefix + "." + index + ".Value");
+                if (key == null && value == null) {
+                    break;
+                }
+                memberPresent = true;
+                if (key == null || key.isBlank()) {
+                    throw new AwsException("InvalidParameterValue", "Tag key cannot be null or empty.", 400);
+                }
+                // The AWS model permits a null tag value, so only the key is required here.
+            }
+        }
+        if (!memberPresent || tags.isEmpty()) {
+            throw new AwsException("InvalidParameterValue", "At least one tag is required.", 400);
+        }
+        return tags;
     }
 
     private static Map<String, String> parseParameterNameValues(MultivaluedMap<String, String> params) {

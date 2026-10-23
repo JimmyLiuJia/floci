@@ -1891,9 +1891,12 @@ public class ElastiCacheService implements ResourceProvider {
                                                   String region) {
         TagResourceRef ref = parseTagResourceArn(resourceArn, region);
         return switch (ref.type()) {
-            case "user" -> updateUserTags(ref.id(), tags);
-            case "usergroup" -> updateUserGroupTags(ref.id(), tags);
-            case "replicationgroup" -> updateReplicationGroupTags(ref.id(), tags);
+            case "user" -> updateUserTags(ref, tags);
+            case "usergroup" -> updateUserGroupTags(ref, tags);
+            case "replicationgroup" -> updateReplicationGroupTags(ref, tags);
+            case "cluster" -> updateCacheClusterTags(ref, tags);
+            case "subnetgroup" -> updateCacheSubnetGroupTags(ref, tags);
+            case "parametergroup" -> updateCacheParameterGroupTags(ref, tags);
             default -> throw invalidTagResource(resourceArn);
         };
     }
@@ -1902,53 +1905,156 @@ public class ElastiCacheService implements ResourceProvider {
                                                        String region) {
         TagResourceRef ref = parseTagResourceArn(resourceArn, region);
         return switch (ref.type()) {
-            case "user" -> removeUserTags(ref.id(), tagKeys);
-            case "usergroup" -> removeUserGroupTags(ref.id(), tagKeys);
-            case "replicationgroup" -> removeReplicationGroupTags(ref.id(), tagKeys);
+            case "user" -> removeUserTags(ref, tagKeys);
+            case "usergroup" -> removeUserGroupTags(ref, tagKeys);
+            case "replicationgroup" -> removeReplicationGroupTags(ref, tagKeys);
+            case "cluster" -> removeCacheClusterTags(ref, tagKeys);
+            case "subnetgroup" -> removeCacheSubnetGroupTags(ref, tagKeys);
+            case "parametergroup" -> removeCacheParameterGroupTags(ref, tagKeys);
             default -> throw invalidTagResource(resourceArn);
         };
     }
 
-    private Map<String, String> updateUserTags(String userId, Map<String, String> tags) {
-        ElastiCacheUser user = getUser(userId);
-        user.getTags().putAll(tags);
-        users.put(userId, user);
-        return new LinkedHashMap<>(user.getTags());
+    private Map<String, String> updateUserTags(TagResourceRef ref, Map<String, String> tags) {
+        synchronized (userGroupLock) {
+            ElastiCacheUser user = getUser(ref.id());
+            requireResourceArn(user.getArn(), ref.resourceArn(), "UserNotFound", ref.id());
+            user.getTags().putAll(tags);
+            users.put(ref.id(), user);
+            return new LinkedHashMap<>(user.getTags());
+        }
     }
 
-    private Map<String, String> removeUserTags(String userId, List<String> tagKeys) {
-        ElastiCacheUser user = getUser(userId);
-        tagKeys.forEach(user.getTags()::remove);
-        users.put(userId, user);
-        return new LinkedHashMap<>(user.getTags());
+    private Map<String, String> removeUserTags(TagResourceRef ref, List<String> tagKeys) {
+        synchronized (userGroupLock) {
+            ElastiCacheUser user = getUser(ref.id());
+            requireResourceArn(user.getArn(), ref.resourceArn(), "UserNotFound", ref.id());
+            tagKeys.forEach(user.getTags()::remove);
+            users.put(ref.id(), user);
+            return new LinkedHashMap<>(user.getTags());
+        }
     }
 
-    private Map<String, String> updateUserGroupTags(String userGroupId, Map<String, String> tags) {
-        ElastiCacheUserGroup userGroup = getUserGroup(userGroupId);
-        userGroup.getTags().putAll(tags);
-        userGroups.put(userGroup.getUserGroupId(), userGroup);
-        return new LinkedHashMap<>(userGroup.getTags());
+    private Map<String, String> updateUserGroupTags(TagResourceRef ref, Map<String, String> tags) {
+        synchronized (userGroupLock) {
+            ElastiCacheUserGroup userGroup = getUserGroup(ref.id());
+            requireResourceArn(userGroup.getArn(), ref.resourceArn(), "UserGroupNotFound", ref.id());
+            userGroup.getTags().putAll(tags);
+            userGroups.put(userGroup.getUserGroupId(), userGroup);
+            return new LinkedHashMap<>(userGroup.getTags());
+        }
     }
 
-    private Map<String, String> removeUserGroupTags(String userGroupId, List<String> tagKeys) {
-        ElastiCacheUserGroup userGroup = getUserGroup(userGroupId);
-        tagKeys.forEach(userGroup.getTags()::remove);
-        userGroups.put(userGroup.getUserGroupId(), userGroup);
-        return new LinkedHashMap<>(userGroup.getTags());
+    private Map<String, String> removeUserGroupTags(TagResourceRef ref, List<String> tagKeys) {
+        synchronized (userGroupLock) {
+            ElastiCacheUserGroup userGroup = getUserGroup(ref.id());
+            requireResourceArn(userGroup.getArn(), ref.resourceArn(), "UserGroupNotFound", ref.id());
+            tagKeys.forEach(userGroup.getTags()::remove);
+            userGroups.put(userGroup.getUserGroupId(), userGroup);
+            return new LinkedHashMap<>(userGroup.getTags());
+        }
     }
 
-    private Map<String, String> updateReplicationGroupTags(String groupId, Map<String, String> tags) {
-        ReplicationGroup group = getReplicationGroup(groupId);
-        group.getTags().putAll(tags);
-        groups.put(groupId, group);
-        return new LinkedHashMap<>(group.getTags());
+    private Map<String, String> updateReplicationGroupTags(TagResourceRef ref, Map<String, String> tags) {
+        synchronized (lockFor("rg:" + ref.id())) {
+            ReplicationGroup group = getReplicationGroup(ref.id());
+            requireResourceArn(group.getArn(), ref.resourceArn(), "ReplicationGroupNotFoundFault", ref.id());
+            group.getTags().putAll(tags);
+            groups.put(ref.id(), group);
+            return new LinkedHashMap<>(group.getTags());
+        }
     }
 
-    private Map<String, String> removeReplicationGroupTags(String groupId, List<String> tagKeys) {
-        ReplicationGroup group = getReplicationGroup(groupId);
-        tagKeys.forEach(group.getTags()::remove);
-        groups.put(groupId, group);
-        return new LinkedHashMap<>(group.getTags());
+    private Map<String, String> removeReplicationGroupTags(TagResourceRef ref, List<String> tagKeys) {
+        synchronized (lockFor("rg:" + ref.id())) {
+            ReplicationGroup group = getReplicationGroup(ref.id());
+            requireResourceArn(group.getArn(), ref.resourceArn(), "ReplicationGroupNotFoundFault", ref.id());
+            tagKeys.forEach(group.getTags()::remove);
+            groups.put(ref.id(), group);
+            return new LinkedHashMap<>(group.getTags());
+        }
+    }
+
+    private Map<String, String> updateCacheClusterTags(TagResourceRef ref, Map<String, String> tags) {
+        synchronized (lockFor("cc:" + ref.id())) {
+            StorageBackend<String, CacheCluster> store = cacheClusters.get(ref.id()).isPresent()
+                    ? cacheClusters : memcachedClusters;
+            CacheCluster cluster = store.get(ref.id())
+                    .filter(value -> value.getServerlessCacheName() == null)
+                    .orElseThrow(() -> new AwsException("CacheClusterNotFound",
+                            "Cache cluster " + ref.id() + " not found.", 404));
+            requireResourceArn(cluster.getArn(), ref.resourceArn(), "CacheClusterNotFound", ref.id());
+            cluster.getTags().putAll(tags);
+            store.put(ref.id(), cluster);
+            return new LinkedHashMap<>(cluster.getTags());
+        }
+    }
+
+    private Map<String, String> removeCacheClusterTags(TagResourceRef ref, List<String> tagKeys) {
+        synchronized (lockFor("cc:" + ref.id())) {
+            StorageBackend<String, CacheCluster> store = cacheClusters.get(ref.id()).isPresent()
+                    ? cacheClusters : memcachedClusters;
+            CacheCluster cluster = store.get(ref.id())
+                    .filter(value -> value.getServerlessCacheName() == null)
+                    .orElseThrow(() -> new AwsException("CacheClusterNotFound",
+                            "Cache cluster " + ref.id() + " not found.", 404));
+            requireResourceArn(cluster.getArn(), ref.resourceArn(), "CacheClusterNotFound", ref.id());
+            tagKeys.forEach(cluster.getTags()::remove);
+            store.put(ref.id(), cluster);
+            return new LinkedHashMap<>(cluster.getTags());
+        }
+    }
+
+    private Map<String, String> updateCacheSubnetGroupTags(TagResourceRef ref, Map<String, String> tags) {
+        synchronized (lockFor("sng:" + ref.id())) {
+            CacheSubnetGroup group = subnetGroups.get(ref.id()).orElseThrow(() ->
+                    new AwsException("CacheSubnetGroupNotFound", "Cache subnet group " + ref.id() + " not found.", 404));
+            requireResourceArn(regionResolver.buildArn("elasticache", regionResolver.getRegion(),
+                    "subnetgroup:" + ref.id()).toString(), ref.resourceArn(),
+                    "CacheSubnetGroupNotFound", ref.id());
+            group.getTags().putAll(tags);
+            subnetGroups.put(ref.id(), group);
+            return new LinkedHashMap<>(group.getTags());
+        }
+    }
+
+    private Map<String, String> removeCacheSubnetGroupTags(TagResourceRef ref, List<String> tagKeys) {
+        synchronized (lockFor("sng:" + ref.id())) {
+            CacheSubnetGroup group = subnetGroups.get(ref.id()).orElseThrow(() ->
+                    new AwsException("CacheSubnetGroupNotFound", "Cache subnet group " + ref.id() + " not found.", 404));
+            requireResourceArn(regionResolver.buildArn("elasticache", regionResolver.getRegion(),
+                    "subnetgroup:" + ref.id()).toString(), ref.resourceArn(),
+                    "CacheSubnetGroupNotFound", ref.id());
+            tagKeys.forEach(group.getTags()::remove);
+            subnetGroups.put(ref.id(), group);
+            return new LinkedHashMap<>(group.getTags());
+        }
+    }
+
+    private Map<String, String> updateCacheParameterGroupTags(TagResourceRef ref, Map<String, String> tags) {
+        synchronized (lockFor("pg:" + ref.id())) {
+            CacheParameterGroup group = parameterGroups.get(ref.id()).orElseThrow(() ->
+                    new AwsException("CacheParameterGroupNotFound", "Cache parameter group " + ref.id() + " not found.", 404));
+            requireResourceArn(regionResolver.buildArn("elasticache", regionResolver.getRegion(),
+                    "parametergroup:" + ref.id()).toString(), ref.resourceArn(),
+                    "CacheParameterGroupNotFound", ref.id());
+            group.getTags().putAll(tags);
+            parameterGroups.put(ref.id(), group);
+            return new LinkedHashMap<>(group.getTags());
+        }
+    }
+
+    private Map<String, String> removeCacheParameterGroupTags(TagResourceRef ref, List<String> tagKeys) {
+        synchronized (lockFor("pg:" + ref.id())) {
+            CacheParameterGroup group = parameterGroups.get(ref.id()).orElseThrow(() ->
+                    new AwsException("CacheParameterGroupNotFound", "Cache parameter group " + ref.id() + " not found.", 404));
+            requireResourceArn(regionResolver.buildArn("elasticache", regionResolver.getRegion(),
+                    "parametergroup:" + ref.id()).toString(), ref.resourceArn(),
+                    "CacheParameterGroupNotFound", ref.id());
+            tagKeys.forEach(group.getTags()::remove);
+            parameterGroups.put(ref.id(), group);
+            return new LinkedHashMap<>(group.getTags());
+        }
     }
 
     private TagResourceRef parseTagResourceArn(String resourceArn, String region) {
@@ -1959,24 +2065,36 @@ public class ElastiCacheService implements ResourceProvider {
             throw invalidTagResource(resourceArn);
         }
         if (!"elasticache".equals(arn.service())
-                || !regionResolver.getPartition().equals(arn.partition())
-                || !region.equals(arn.region())
-                || !regionResolver.getAccountId().equals(arn.accountId())) {
+                || !regionResolver.partitionForRegion(region).equals(arn.partition())) {
             throw invalidTagResource(resourceArn);
+        }
+        if (!region.equals(arn.region()) || !regionResolver.getAccountId().equals(arn.accountId())) {
+            throw invalidTagResourceScope(resourceArn);
         }
         int separator = arn.resource().indexOf(':');
         if (separator <= 0 || separator == arn.resource().length() - 1) {
             throw invalidTagResource(resourceArn);
         }
         return new TagResourceRef(arn.resource().substring(0, separator),
-                arn.resource().substring(separator + 1));
+                arn.resource().substring(separator + 1), resourceArn);
     }
 
     private static AwsException invalidTagResource(String resourceArn) {
         return new AwsException("InvalidARNFault", "Invalid resource ARN: " + resourceArn, 400);
     }
 
-    private record TagResourceRef(String type, String id) {}
+    private static AwsException invalidTagResourceScope(String resourceArn) {
+        return new AwsException("InvalidParameterValue",
+                "The resource ARN does not belong to the requested Region or account: " + resourceArn, 400);
+    }
+
+    private static void requireResourceArn(String actualArn, String requestedArn, String errorCode, String id) {
+        if (actualArn == null || !actualArn.equalsIgnoreCase(requestedArn)) {
+            throw new AwsException(errorCode, "Resource " + id + " not found.", 404);
+        }
+    }
+
+    private record TagResourceRef(String type, String id, String resourceArn) {}
 
     public ElastiCacheUser getUser(String userId) {
         return users.get(userId).orElseThrow(() ->

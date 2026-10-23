@@ -17,6 +17,7 @@ import io.github.hectorvent.floci.services.elasticache.container.ValkeyClusterFo
 import io.github.hectorvent.floci.services.elasticache.model.AuthMode;
 import io.github.hectorvent.floci.services.elasticache.model.CacheCluster;
 import io.github.hectorvent.floci.services.elasticache.model.CacheClusterStatus;
+import io.github.hectorvent.floci.services.elasticache.model.CacheParameterGroup;
 import io.github.hectorvent.floci.services.elasticache.model.ClusterNode;
 import io.github.hectorvent.floci.services.elasticache.model.ElastiCacheUser;
 import io.github.hectorvent.floci.services.elasticache.model.ElastiCacheUserGroup;
@@ -171,6 +172,51 @@ class ElastiCacheServiceTest {
         service.addTagsToResource(taggedGroup.getArn(), Map.of("environment", "test"), "us-east-1");
         assertEquals(Map.of("team", "cache", "environment", "test"),
                 service.getUserGroup("tagged-group").getTags());
+    }
+
+    @Test
+    void tagResourceRejectsSameIdResourceFromAnotherRegion() {
+        ElastiCacheUser user = service.createUser("regional-user", "regional", AuthMode.PASSWORD,
+                List.of("password"), "on ~* +@all", "redis");
+        String foreignRegionArn = user.getArn().replace(":us-east-1:", ":eu-west-1:");
+
+        AwsException error = assertThrows(AwsException.class,
+                () -> service.addTagsToResource(foreignRegionArn, Map.of("env", "test"), "eu-west-1"));
+
+        assertEquals("UserNotFound", error.getErrorCode());
+        assertTrue(service.getUser("regional-user").getTags().isEmpty());
+    }
+
+    @Test
+    void tagResourceDerivesPartitionFromRequestedRegion() {
+        ElastiCacheUserGroup group = service.createUserGroup("gov-group", "valkey", List.of(),
+                "us-gov-west-1");
+
+        service.addTagsToResource(group.getArn(), Map.of("env", "gov"), "us-gov-west-1");
+
+        assertEquals(Map.of("env", "gov"), service.getUserGroup("gov-group").getTags());
+    }
+
+    @Test
+    void tagMutationsSupportCacheClustersAndParameterGroups() {
+        CacheCluster cluster = service.createCacheCluster(cacheClusterRequest("tag-cluster", "redis", 1));
+        CacheParameterGroup parameterGroup = service.createCacheParameterGroup(
+                "tag-pg", "redis7", "tagged parameter group", Map.of("owner", "platform"));
+
+        service.addTagsToResource(cluster.getArn(), Map.of("environment", "test"), "us-east-1");
+        service.removeTagsFromResource(cluster.getArn(), List.of("environment"), "us-east-1");
+        assertTrue(service.findCacheClusters("tag-cluster").getFirst().getTags().isEmpty());
+
+        service.addTagsToResource("arn:aws:elasticache:us-east-1:000000000000:parametergroup:tag-pg",
+                Map.of("environment", "test"), "us-east-1");
+        assertEquals(Map.of("owner", "platform", "environment", "test"),
+                service.findParameterGroup(parameterGroup.getName()).orElseThrow().getTags());
+
+        AwsException wrongRegion = assertThrows(AwsException.class, () -> service.addTagsToResource(
+                "arn:aws:elasticache:eu-west-1:000000000000:parametergroup:tag-pg",
+                Map.of("wrong", "region"), "eu-west-1"));
+        assertEquals("CacheParameterGroupNotFound", wrongRegion.getErrorCode());
+        assertFalse(service.findParameterGroup("tag-pg").orElseThrow().getTags().containsKey("wrong"));
     }
 
     @Test

@@ -1,6 +1,7 @@
 package io.github.hectorvent.floci.services.elasticache;
 
 import com.fasterxml.jackson.core.type.TypeReference;
+import io.github.hectorvent.floci.core.common.AwsArnUtils;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.RegionResolver;
 import io.github.hectorvent.floci.core.common.Resettable;
@@ -243,6 +244,32 @@ public class ElastiCacheServerlessService implements Resettable {
         }
     }
 
+    public Map<String, String> addTagsToResource(String resourceArn, Map<String, String> tags, String region) {
+        TagResourceRef ref = parseTagResourceArn(resourceArn, region);
+        synchronized (lockFor(ref.id())) {
+            ServerlessCache cache = requireCache(ref.id());
+            requireResourceArn(cache.getArn(), ref.resourceArn(), ref.id());
+            Map<String, String> updatedTags = cache.getTags();
+            updatedTags.putAll(tags);
+            cache.setTags(updatedTags);
+            caches.put(key(ref.id()), cache);
+            return cache.getTags();
+        }
+    }
+
+    public Map<String, String> removeTagsFromResource(String resourceArn, List<String> tagKeys, String region) {
+        TagResourceRef ref = parseTagResourceArn(resourceArn, region);
+        synchronized (lockFor(ref.id())) {
+            ServerlessCache cache = requireCache(ref.id());
+            requireResourceArn(cache.getArn(), ref.resourceArn(), ref.id());
+            Map<String, String> updatedTags = cache.getTags();
+            tagKeys.forEach(updatedTags::remove);
+            cache.setTags(updatedTags);
+            caches.put(key(ref.id()), cache);
+            return cache.getTags();
+        }
+    }
+
     private static void validateTagCount(Map<String, String> tags) {
         if (tags != null && tags.size() > 50) {
             throw new AwsException("TagQuotaPerResourceExceeded", "At most 50 tags are supported.", 400);
@@ -312,6 +339,42 @@ public class ElastiCacheServerlessService implements Resettable {
         return caches.get(key(name)).orElseThrow(() -> new AwsException("ServerlessCacheNotFoundFault",
                 "Serverless cache " + name + " not found.", 404));
     }
+
+    private TagResourceRef parseTagResourceArn(String resourceArn, String region) {
+        AwsArnUtils.Arn arn;
+        try {
+            arn = AwsArnUtils.parse(resourceArn);
+        } catch (IllegalArgumentException e) {
+            throw invalidTagResource(resourceArn);
+        }
+        if (!"elasticache".equals(arn.service())
+                || !resolver.partitionForRegion(region).equals(arn.partition())
+                || !"serverlesscache".equals(arn.resource().split(":", 2)[0])) {
+            throw invalidTagResource(resourceArn);
+        }
+        if (!region.equals(arn.region()) || !resolver.getAccountId().equals(arn.accountId())) {
+            throw new AwsException("InvalidParameterValue",
+                    "The resource ARN does not belong to the requested Region or account: " + resourceArn, 400);
+        }
+        String[] resource = arn.resource().split(":", 2);
+        if (resource.length != 2 || resource[1].isBlank()) {
+            throw invalidTagResource(resourceArn);
+        }
+        return new TagResourceRef(resource[0], resource[1], resourceArn);
+    }
+
+    private static AwsException invalidTagResource(String resourceArn) {
+        return new AwsException("InvalidARNFault", "Invalid resource ARN: " + resourceArn, 400);
+    }
+
+    private static void requireResourceArn(String actualArn, String requestedArn, String id) {
+        if (actualArn == null || !actualArn.equalsIgnoreCase(requestedArn)) {
+            throw new AwsException("ServerlessCacheNotFoundFault",
+                    "Serverless cache " + id + " not found.", 404);
+        }
+    }
+
+    private record TagResourceRef(String type, String id, String resourceArn) {}
 
     private String key(String name) {
         return resolver.getRegion() + "/" + name;
