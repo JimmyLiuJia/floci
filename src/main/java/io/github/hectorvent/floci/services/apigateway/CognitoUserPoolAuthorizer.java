@@ -79,7 +79,7 @@ public class CognitoUserPoolAuthorizer {
             String principalId = String.valueOf(verified.claims().getOrDefault("sub", "unknown"));
             Map<String, Object> claims = new LinkedHashMap<>(verified.claims());
             claims.replaceAll((key, value) -> value instanceof List<?> items
-                    ? items.stream().map(String::valueOf).collect(Collectors.joining(" ", "[", "]")) : value);
+                    ? items.stream().map(String::valueOf).collect(Collectors.joining(",")) : value);
             return new Result(null, principalId, Map.of("claims", claims));
         } catch (AwsException e) {
             return new Result(Failure.UNAUTHORIZED, null, null);

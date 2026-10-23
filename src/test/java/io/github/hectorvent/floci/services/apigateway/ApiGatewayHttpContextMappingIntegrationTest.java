@@ -190,8 +190,7 @@ class ApiGatewayHttpContextMappingIntegrationTest {
                 .then().statusCode(200).extract().asByteArray());
         JsonNode groups = response.path("headers").path("x-auth-groups");
         assertEquals(1, groups.size());
-        assertTrue(groups.get(0).asText().contains("admins"));
-        assertTrue(groups.get(0).asText().contains("auditors"));
+        assertEquals("admins,auditors", groups.get(0).asText());
         assertFalse(groups.get(0).asText().contains("forged"));
         assertTrue(response.path("headers").has("x-auth-sub"));
     }
