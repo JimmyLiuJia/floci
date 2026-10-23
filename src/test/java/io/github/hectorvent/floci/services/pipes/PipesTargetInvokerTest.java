@@ -1,5 +1,6 @@
 package io.github.hectorvent.floci.services.pipes;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.github.hectorvent.floci.config.EmulatorConfig;
@@ -18,6 +19,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.time.Instant;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -213,6 +215,43 @@ class PipesTargetInvokerTest {
     void inputTemplate_numericNotQuoted() {
         String result = invoker.applyInputTemplate("{\"count\": <$.count>}", "{\"count\": 42}");
         assertEquals("{\"count\": 42}", result);
+    }
+
+    @Test
+    void inputTemplate_quotedStringPlaceholderIsNotQuotedTwice() throws Exception {
+        String result = invoker.applyInputTemplate("{\"messageId\": \"<$.messageId>\"}",
+                "{\"messageId\": \"abc-123\"}");
+
+        assertEquals("abc-123", MAPPER.readTree(result).path("messageId").asText());
+    }
+
+    @Test
+    void inputTemplate_missingPathBecomesEmptyJsonString() throws Exception {
+        String result = invoker.applyInputTemplate("{\"taskType\": <$.body.missing>}",
+                "{\"body\": \"{\\\"taskType\\\":\\\"x\\\"}\"}");
+
+        assertEquals("", MAPPER.readTree(result).path("taskType").asText());
+    }
+
+    @Test
+    void inputTemplate_decodesJsonSqsBodyAtItsRoot() throws Exception {
+        String result = invoker.applyInputTemplate("{\"body\": <$.body>}",
+                "{\"body\": \"{\\\"taskType\\\":\\\"x\\\"}\"}");
+
+        JsonNode body = MAPPER.readTree(result).path("body");
+        assertTrue(body.isObject());
+        assertEquals("x", body.path("taskType").asText());
+    }
+
+    @Test
+    void inputTemplate_ingestionTimeIsAnIsoInstant() throws Exception {
+        Instant before = Instant.now().minusSeconds(1);
+        String result = invoker.applyInputTemplate("{\"t\": <aws.pipes.event.ingestion-time>}", "{}");
+        Instant after = Instant.now().plusSeconds(1);
+
+        Instant ingestionTime = Instant.parse(MAPPER.readTree(result).path("t").asText());
+        assertFalse(ingestionTime.isBefore(before));
+        assertFalse(ingestionTime.isAfter(after));
     }
 
     // ──────────────────────────── nested JSON string resolution ────────────────────────────
