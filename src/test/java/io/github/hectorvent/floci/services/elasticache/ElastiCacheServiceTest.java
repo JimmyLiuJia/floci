@@ -34,6 +34,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
+import java.lang.reflect.Field;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -42,7 +43,11 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -198,6 +203,60 @@ class ElastiCacheServiceTest {
         assertEquals("InvalidARN", removeError.getErrorCode());
         assertEquals(400, addError.getHttpStatus());
         assertEquals(400, removeError.getHttpStatus());
+    }
+
+    @Test
+    void tagMutationsReportMissingSubnetGroupWithAwsFaultCode() {
+        String arn = "arn:aws:elasticache:us-east-1:000000000000:subnetgroup:missing-tag-subnet";
+
+        AwsException addError = assertThrows(AwsException.class,
+                () -> service.addTagsToResource(arn, Map.of("env", "test"), "us-east-1"));
+        AwsException removeError = assertThrows(AwsException.class,
+                () -> service.removeTagsFromResource(arn, List.of("env"), "us-east-1"));
+
+        assertEquals("CacheSubnetGroupNotFoundFault", addError.getErrorCode());
+        assertEquals("CacheSubnetGroupNotFoundFault", removeError.getErrorCode());
+        assertEquals(400, addError.getHttpStatus());
+        assertEquals(400, removeError.getHttpStatus());
+    }
+
+    @Test
+    void tagWritesWaitForParameterGroupDeletion() throws Exception {
+        String name = "tag-delete-race-pg";
+        String arn = "arn:aws:elasticache:us-east-1:000000000000:parametergroup:" + name;
+        service.createCacheParameterGroup(name, "redis7", "tagged", Map.of());
+
+        Field locksField = ElastiCacheService.class.getDeclaredField("parameterGroupLocks");
+        locksField.setAccessible(true);
+        Object monitor = ((ConcurrentHashMap<?, ?>) locksField.get(service)).get(name);
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        CountDownLatch started = new CountDownLatch(1);
+        try {
+            Future<String> tag = pool.submit(() -> {
+                started.countDown();
+                try {
+                    service.addTagsToResource(arn, Map.of("env", "test"), "us-east-1");
+                    return "tagged";
+                } catch (AwsException error) {
+                    return error.getErrorCode();
+                }
+            });
+            String completedBeforeDelete = null;
+            synchronized (monitor) {
+                assertTrue(started.await(5, TimeUnit.SECONDS));
+                try {
+                    completedBeforeDelete = tag.get(1, TimeUnit.SECONDS);
+                } catch (TimeoutException expected) {
+                    // A tag writer using the lifecycle lock remains blocked until deletion exits.
+                }
+                service.deleteCacheParameterGroup(name);
+            }
+            assertNull(completedBeforeDelete, "tagging bypassed the parameter-group lifecycle lock");
+            assertEquals("CacheParameterGroupNotFound", tag.get(5, TimeUnit.SECONDS));
+            assertTrue(service.findParameterGroup(name).isEmpty());
+        } finally {
+            pool.shutdownNow();
+        }
     }
 
     @Test

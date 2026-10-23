@@ -16,6 +16,7 @@ import io.github.hectorvent.floci.core.storage.StorageFactory;
 import io.github.hectorvent.floci.services.ec2.Ec2Service;
 import io.github.hectorvent.floci.services.ec2.model.SecurityGroup;
 import io.github.hectorvent.floci.services.ec2.model.Subnet;
+import io.github.hectorvent.floci.services.elasticache.ElastiCacheTagResourceArn.TagResourceRef;
 import io.github.hectorvent.floci.services.elasticache.container.ElastiCacheContainerHandle;
 import io.github.hectorvent.floci.services.elasticache.container.ElastiCacheContainerManager;
 import io.github.hectorvent.floci.services.elasticache.container.ValkeyClusterFormation;
@@ -1889,7 +1890,7 @@ public class ElastiCacheService implements ResourceProvider {
 
     public Map<String, String> addTagsToResource(String resourceArn, Map<String, String> tags,
                                                   String region) {
-        TagResourceRef ref = parseTagResourceArn(resourceArn, region);
+        TagResourceRef ref = ElastiCacheTagResourceArn.parse(resourceArn, region, regionResolver);
         return switch (ref.type()) {
             case "user" -> updateUserTags(ref, tags);
             case "usergroup" -> updateUserGroupTags(ref, tags);
@@ -1897,13 +1898,13 @@ public class ElastiCacheService implements ResourceProvider {
             case "cluster" -> updateCacheClusterTags(ref, tags);
             case "subnetgroup" -> updateCacheSubnetGroupTags(ref, tags);
             case "parametergroup" -> updateCacheParameterGroupTags(ref, tags);
-            default -> throw invalidTagResource(resourceArn);
+            default -> throw ElastiCacheTagResourceArn.invalid(resourceArn);
         };
     }
 
     public Map<String, String> removeTagsFromResource(String resourceArn, List<String> tagKeys,
                                                        String region) {
-        TagResourceRef ref = parseTagResourceArn(resourceArn, region);
+        TagResourceRef ref = ElastiCacheTagResourceArn.parse(resourceArn, region, regionResolver);
         return switch (ref.type()) {
             case "user" -> removeUserTags(ref, tagKeys);
             case "usergroup" -> removeUserGroupTags(ref, tagKeys);
@@ -1911,7 +1912,7 @@ public class ElastiCacheService implements ResourceProvider {
             case "cluster" -> removeCacheClusterTags(ref, tagKeys);
             case "subnetgroup" -> removeCacheSubnetGroupTags(ref, tagKeys);
             case "parametergroup" -> removeCacheParameterGroupTags(ref, tagKeys);
-            default -> throw invalidTagResource(resourceArn);
+            default -> throw ElastiCacheTagResourceArn.invalid(resourceArn);
         };
     }
 
@@ -2008,10 +2009,10 @@ public class ElastiCacheService implements ResourceProvider {
     private Map<String, String> updateCacheSubnetGroupTags(TagResourceRef ref, Map<String, String> tags) {
         synchronized (lockFor("sng:" + ref.id())) {
             CacheSubnetGroup group = subnetGroups.get(ref.id()).orElseThrow(() ->
-                    new AwsException("CacheSubnetGroupNotFound", "Cache subnet group " + ref.id() + " not found.", 404));
+                    new AwsException("CacheSubnetGroupNotFoundFault", "Cache subnet group " + ref.id() + " not found.", 400));
             requireResourceArn(regionResolver.buildArn("elasticache", regionResolver.getRegion(),
                     "subnetgroup:" + ref.id()).toString(), ref.resourceArn(),
-                    "CacheSubnetGroupNotFound", ref.id());
+                    "CacheSubnetGroupNotFoundFault", ref.id(), 400);
             group.getTags().putAll(tags);
             subnetGroups.put(ref.id(), group);
             return new LinkedHashMap<>(group.getTags());
@@ -2021,10 +2022,10 @@ public class ElastiCacheService implements ResourceProvider {
     private Map<String, String> removeCacheSubnetGroupTags(TagResourceRef ref, List<String> tagKeys) {
         synchronized (lockFor("sng:" + ref.id())) {
             CacheSubnetGroup group = subnetGroups.get(ref.id()).orElseThrow(() ->
-                    new AwsException("CacheSubnetGroupNotFound", "Cache subnet group " + ref.id() + " not found.", 404));
+                    new AwsException("CacheSubnetGroupNotFoundFault", "Cache subnet group " + ref.id() + " not found.", 400));
             requireResourceArn(regionResolver.buildArn("elasticache", regionResolver.getRegion(),
                     "subnetgroup:" + ref.id()).toString(), ref.resourceArn(),
-                    "CacheSubnetGroupNotFound", ref.id());
+                    "CacheSubnetGroupNotFoundFault", ref.id(), 400);
             tagKeys.forEach(group.getTags()::remove);
             subnetGroups.put(ref.id(), group);
             return new LinkedHashMap<>(group.getTags());
@@ -2032,7 +2033,7 @@ public class ElastiCacheService implements ResourceProvider {
     }
 
     private Map<String, String> updateCacheParameterGroupTags(TagResourceRef ref, Map<String, String> tags) {
-        synchronized (lockFor("pg:" + ref.id())) {
+        synchronized (lockFor(ref.id())) {
             CacheParameterGroup group = parameterGroups.get(ref.id()).orElseThrow(() ->
                     new AwsException("CacheParameterGroupNotFound", "Cache parameter group " + ref.id() + " not found.", 404));
             requireResourceArn(regionResolver.buildArn("elasticache", regionResolver.getRegion(),
@@ -2045,7 +2046,7 @@ public class ElastiCacheService implements ResourceProvider {
     }
 
     private Map<String, String> removeCacheParameterGroupTags(TagResourceRef ref, List<String> tagKeys) {
-        synchronized (lockFor("pg:" + ref.id())) {
+        synchronized (lockFor(ref.id())) {
             CacheParameterGroup group = parameterGroups.get(ref.id()).orElseThrow(() ->
                     new AwsException("CacheParameterGroupNotFound", "Cache parameter group " + ref.id() + " not found.", 404));
             requireResourceArn(regionResolver.buildArn("elasticache", regionResolver.getRegion(),
@@ -2057,44 +2058,16 @@ public class ElastiCacheService implements ResourceProvider {
         }
     }
 
-    private TagResourceRef parseTagResourceArn(String resourceArn, String region) {
-        AwsArnUtils.Arn arn;
-        try {
-            arn = AwsArnUtils.parse(resourceArn);
-        } catch (IllegalArgumentException e) {
-            throw invalidTagResource(resourceArn);
-        }
-        if (!"elasticache".equals(arn.service())
-                || !regionResolver.partitionForRegion(region).equals(arn.partition())) {
-            throw invalidTagResource(resourceArn);
-        }
-        if (!region.equals(arn.region()) || !regionResolver.getAccountId().equals(arn.accountId())) {
-            throw invalidTagResourceScope(resourceArn);
-        }
-        int separator = arn.resource().indexOf(':');
-        if (separator <= 0 || separator == arn.resource().length() - 1) {
-            throw invalidTagResource(resourceArn);
-        }
-        return new TagResourceRef(arn.resource().substring(0, separator),
-                arn.resource().substring(separator + 1), resourceArn);
-    }
-
-    private static AwsException invalidTagResource(String resourceArn) {
-        return new AwsException("InvalidARN", "Invalid resource ARN: " + resourceArn, 400);
-    }
-
-    private static AwsException invalidTagResourceScope(String resourceArn) {
-        return new AwsException("InvalidParameterValue",
-                "The resource ARN does not belong to the requested Region or account: " + resourceArn, 400);
-    }
-
     private static void requireResourceArn(String actualArn, String requestedArn, String errorCode, String id) {
-        if (actualArn == null || !actualArn.equalsIgnoreCase(requestedArn)) {
-            throw new AwsException(errorCode, "Resource " + id + " not found.", 404);
-        }
+        requireResourceArn(actualArn, requestedArn, errorCode, id, 404);
     }
 
-    private record TagResourceRef(String type, String id, String resourceArn) {}
+    private static void requireResourceArn(String actualArn, String requestedArn, String errorCode, String id,
+                                           int httpStatus) {
+        if (actualArn == null || !actualArn.equalsIgnoreCase(requestedArn)) {
+            throw new AwsException(errorCode, "Resource " + id + " not found.", httpStatus);
+        }
+    }
 
     public ElastiCacheUser getUser(String userId) {
         return users.get(userId).orElseThrow(() ->
