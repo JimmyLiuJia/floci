@@ -139,6 +139,20 @@ class EventBridgeServiceTest {
         assertTrue(service.listTagsForResource(bus.getArn(), REGION).isEmpty());
     }
 
+    @ParameterizedTest
+    @CsvSource({
+            "aws-us-gov, us-gov-west-1",
+            "aws-cn, cn-north-1"
+    })
+    void tagResourceAcceptsResourceArnFromRequestedPartition(String partition, String region) {
+        EventBus bus = service.createEventBus("partition-bus", null, null, region);
+
+        service.tagResource(bus.getArn(), Map.of("env", "test"), region);
+
+        assertEquals(Map.of("env", "test"), service.listTagsForResource(bus.getArn(), region));
+        assertTrue(bus.getArn().startsWith("arn:" + partition + ":events:"));
+    }
+
     @Test
     void listTagsForResourceRejectsArnFromAnotherAccount() {
         EventBus bus = service.createEventBus("owned-bus", null, null, REGION);

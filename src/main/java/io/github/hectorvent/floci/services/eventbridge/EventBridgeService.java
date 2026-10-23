@@ -586,7 +586,7 @@ public class EventBridgeService implements ResourceProvider {
                     "Resource not found: " + resourceArn, 400);
         }
         if (!"events".equals(arn.service())
-                || !regionResolver.getPartition().equals(arn.partition())
+                || !regionResolver.partitionForRegion(region).equals(arn.partition())
                 || !region.equals(arn.region())
                 || !regionResolver.getAccountId().equals(arn.accountId())) {
             throw new AwsException("ResourceNotFoundException",
