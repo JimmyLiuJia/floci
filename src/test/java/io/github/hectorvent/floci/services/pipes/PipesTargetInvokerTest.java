@@ -279,6 +279,19 @@ class PipesTargetInvokerTest {
     }
 
     @Test
+    void extractJsonPath_doesNotDecodeNestedBodyValueTwice() throws Exception {
+        ObjectNode body = MAPPER.createObjectNode();
+        body.put("key", "{\"id\":1}");
+        ObjectNode payload = MAPPER.createObjectNode();
+        payload.put("body", body.toString());
+        String result = invoker.extractJsonPath("$.body.key", payload.toString());
+
+        JsonNode value = MAPPER.readTree(result);
+        assertTrue(value.isTextual());
+        assertEquals("{\"id\":1}", value.asText());
+    }
+
+    @Test
     void inputTemplate_reusesIngestionTimeForRepeatedPlaceholders() throws Exception {
         String result = invoker.applyInputTemplate(
                 "{\"first\": <aws.pipes.event.ingestion-time>, "

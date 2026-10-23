@@ -287,14 +287,16 @@ public class PipesTargetInvoker {
 
             JsonNode current = objectMapper.readTree(json);
             String previousSegment = null;
+            boolean sourceFieldDecoded = false;
             for (String segment : segments) {
                 // AWS Pipes parses an encoded source body when traversing into it.
-                if (isEncodedSourceField(previousSegment) && current.isTextual()) {
+                if (!sourceFieldDecoded && isEncodedSourceField(previousSegment) && current.isTextual()) {
                     try {
                         JsonNode decoded = objectMapper.readTree(current.asText());
                         if (decoded != null && (decoded.isObject() || decoded.isArray())) {
                             current = decoded;
                         }
+                        sourceFieldDecoded = true;
                     } catch (Exception ignored) {
                         return null;
                     }
@@ -309,11 +311,12 @@ public class PipesTargetInvoker {
                 }
                 previousSegment = segment;
             }
-            if (isEncodedSourceField(previousSegment) && current.isTextual()) {
+            if (!sourceFieldDecoded && isEncodedSourceField(previousSegment) && current.isTextual()) {
                 // SQS bodies commonly contain a JSON document as a string. Pipes input
                 // transformation resolves that document when the body itself is selected.
                 try {
                     JsonNode decoded = objectMapper.readTree(current.asText());
+                    sourceFieldDecoded = true;
                     if (decoded != null && (decoded.isObject() || decoded.isArray())) {
                         return decoded.toString();
                     }
