@@ -188,6 +188,19 @@ class ElastiCacheServiceTest {
     }
 
     @Test
+    void tagMutationsUseAwsInvalidArnErrorCode() {
+        AwsException addError = assertThrows(AwsException.class,
+                () -> service.addTagsToResource("not-an-arn", Map.of("env", "test"), "us-east-1"));
+        AwsException removeError = assertThrows(AwsException.class,
+                () -> service.removeTagsFromResource("not-an-arn", List.of("env"), "us-east-1"));
+
+        assertEquals("InvalidARN", addError.getErrorCode());
+        assertEquals("InvalidARN", removeError.getErrorCode());
+        assertEquals(400, addError.getHttpStatus());
+        assertEquals(400, removeError.getHttpStatus());
+    }
+
+    @Test
     void tagResourceDerivesPartitionFromRequestedRegion() {
         ElastiCacheUserGroup group = service.createUserGroup("gov-group", "valkey", List.of(),
                 "us-gov-west-1");

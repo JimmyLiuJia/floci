@@ -2080,7 +2080,7 @@ public class ElastiCacheService implements ResourceProvider {
     }
 
     private static AwsException invalidTagResource(String resourceArn) {
-        return new AwsException("InvalidARNFault", "Invalid resource ARN: " + resourceArn, 400);
+        return new AwsException("InvalidARN", "Invalid resource ARN: " + resourceArn, 400);
     }
 
     private static AwsException invalidTagResourceScope(String resourceArn) {
