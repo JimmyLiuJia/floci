@@ -19,6 +19,7 @@ import io.github.hectorvent.floci.services.eventbridge.model.Rule;
 import io.github.hectorvent.floci.services.eventbridge.model.RuleState;
 import io.github.hectorvent.floci.services.eventbridge.model.Target;
 import io.github.hectorvent.floci.services.resourcegroupstagging.ResourceGroupsTaggingService;
+import io.github.hectorvent.floci.testing.PartitionMatrix;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -140,17 +141,28 @@ class EventBridgeServiceTest {
     }
 
     @ParameterizedTest
-    @CsvSource({
-            "aws-us-gov, us-gov-west-1",
-            "aws-cn, cn-north-1"
-    })
-    void tagResourceAcceptsResourceArnFromRequestedPartition(String partition, String region) {
+    @MethodSource(PartitionMatrix.NON_COMMERCIAL_CASES)
+    void tagResourceAcceptsResourceArnFromRequestedPartition(PartitionMatrix.PartitionCase partitionCase) {
+        String region = partitionCase.region();
         EventBus bus = service.createEventBus("partition-bus", null, null, region);
 
         service.tagResource(bus.getArn(), Map.of("env", "test"), region);
 
         assertEquals(Map.of("env", "test"), service.listTagsForResource(bus.getArn(), region));
-        assertTrue(bus.getArn().startsWith("arn:" + partition + ":events:"));
+        PartitionMatrix.assertArnIn(partitionCase, bus.getArn());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "event-bus/missing", "event-bus/", "rule/missing", "archive/missing", "replay/missing"
+    })
+    void listTagsForResourceRejectsMissingOrUnsupportedResources(String resource) {
+        String arn = "arn:aws:events:us-east-1:000000000000:" + resource;
+
+        AwsException error = assertThrows(AwsException.class, () ->
+                service.listTagsForResource(arn, REGION));
+
+        assertEquals("ResourceNotFoundException", error.getErrorCode());
     }
 
     @Test
