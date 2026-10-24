@@ -117,6 +117,12 @@ public class SnsCfnProvisioner implements CfnResourceProvisioner {
         r.getAttributes().put("TopicArn", topic.getTopicArn());
         r.getAttributes().put("Arn", topic.getTopicArn());
         r.getAttributes().put("TopicName", topicName);
+
+        for (JsonNode subscription : props.path("Subscription")) {
+            snsService.subscribe(topic.getTopicArn(),
+                    ctx.resolveOptional(subscription, "Protocol"),
+                    ctx.resolveOptional(subscription, "Endpoint"), ctx.region(), Map.of());
+        }
     }
 
     private void provisionSubscription(StackResource r, JsonNode props, ProvisionContext ctx) {

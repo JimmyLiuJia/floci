@@ -117,6 +117,21 @@ class SnsCfnProvisionerTest {
     }
 
     @Test
+    void topicCreatesInlineSubscriptions() {
+        when(sns.createTopic(eq("events"), anyMap(), anyMap(), eq(REGION))).thenReturn(topic(TOPIC_ARN));
+        when(sns.subscribe(eq(TOPIC_ARN), eq("lambda"), eq("arn:lambda"), eq(REGION), anyMap()))
+                .thenReturn(subscription("arn:sub"));
+
+        provision("AWS::SNS::Topic", """
+                {"TopicName": "events", "Subscription": [
+                  {"Protocol": "lambda", "Endpoint": "arn:lambda"}
+                ]}
+                """);
+
+        verify(sns).subscribe(TOPIC_ARN, "lambda", "arn:lambda", REGION, Map.of());
+    }
+
+    @Test
     void anUnnamedTopicGetsAGeneratedStackScopedName() {
         ArgumentCaptor<String> name = ArgumentCaptor.forClass(String.class);
         when(sns.createTopic(name.capture(), anyMap(), anyMap(), anyString())).thenReturn(topic(TOPIC_ARN));

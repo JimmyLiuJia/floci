@@ -6690,6 +6690,52 @@ class CloudFormationIntegrationTest {
     }
 
     @Test
+    void createStack_snsTopicWithInlineSubscriptions() {
+        String topicArn = "arn:aws:sns:us-east-1:000000000000:cfn-inline-subs-topic";
+        String template = """
+            {
+              "Resources": {
+                "MyQueue": {
+                  "Type": "AWS::SQS::Queue",
+                  "Properties": {"QueueName": "cfn-inline-subs-queue"}
+                },
+                "MyTopic": {
+                  "Type": "AWS::SNS::Topic",
+                  "Properties": {
+                    "TopicName": "cfn-inline-subs-topic",
+                    "Subscription": [
+                      {"Protocol": "sqs", "Endpoint": {"Fn::GetAtt": ["MyQueue", "Arn"]}},
+                      {"Protocol": "email", "Endpoint": "alerts@example.com"}
+                    ]
+                  }
+                }
+              }
+            }
+            """;
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "CreateStack")
+            .formParam("StackName", "cfn-inline-subs-stack")
+            .formParam("TemplateBody", template)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "ListSubscriptionsByTopic")
+            .formParam("TopicArn", topicArn)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("arn:aws:sqs:us-east-1:000000000000:cfn-inline-subs-queue"))
+            .body(containsString("alerts@example.com"));
+    }
+
+    @Test
     void createStack_snsSqsFifoWithContentBasedDeduplicationAndSubscription() {
         String stackName = "cfn-sns-sqs-fifo-stack";
         String template = """
