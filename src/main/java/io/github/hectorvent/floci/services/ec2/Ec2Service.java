@@ -113,6 +113,7 @@ import org.jboss.logging.Logger;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.InetAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -597,10 +598,42 @@ public class Ec2Service implements ContainerTeardown, ResourceProvider, Resettab
         this(config, containerManager, portForwardManager, amiImageResolver, imageCatalog, instanceTypeCatalog,
                 vpcs, subnets, securityGroups, securityGroupRules, internetGateways, routeTables, keyPairs,
                 addresses, instances, volumes, registeredImages, snapshots, launchTemplates, vpcEndpoints,
+                natGateways, spotInstanceRequests, networkAcls, managedPrefixLists, tags, new InMemoryStorage<>());
+    }
+
+    // Package-private for persistence tests that need the DHCP store to survive a service restart.
+    Ec2Service(EmulatorConfig config, Ec2ContainerManager containerManager,
+               Ec2PortForwardManager portForwardManager,
+               AmiImageResolver amiImageResolver, Ec2ImageCatalog imageCatalog,
+               Ec2InstanceTypeCatalog instanceTypeCatalog,
+               StorageBackend<String, Vpc> vpcs,
+               StorageBackend<String, Subnet> subnets,
+               StorageBackend<String, SecurityGroup> securityGroups,
+               StorageBackend<String, SecurityGroupRule> securityGroupRules,
+               StorageBackend<String, InternetGateway> internetGateways,
+               StorageBackend<String, RouteTable> routeTables,
+               StorageBackend<String, KeyPair> keyPairs,
+               StorageBackend<String, Address> addresses,
+               StorageBackend<String, Instance> instances,
+               StorageBackend<String, Volume> volumes,
+               StorageBackend<String, Image> registeredImages,
+               StorageBackend<String, Snapshot> snapshots,
+               StorageBackend<String, LaunchTemplate> launchTemplates,
+               StorageBackend<String, VpcEndpoint> vpcEndpoints,
+               StorageBackend<String, NatGateway> natGateways,
+               StorageBackend<String, SpotInstanceRequest> spotInstanceRequests,
+               StorageBackend<String, NetworkAcl> networkAcls,
+               StorageBackend<String, ManagedPrefixList> managedPrefixLists,
+               StorageBackend<String, List<Tag>> tags,
+               StorageBackend<String, DhcpOptions> dhcpOptions) {
+        this(config, containerManager, portForwardManager, amiImageResolver, imageCatalog, instanceTypeCatalog,
+                vpcs, subnets, securityGroups, securityGroupRules, internetGateways, routeTables, keyPairs,
+                addresses, instances, volumes, registeredImages, snapshots, launchTemplates, vpcEndpoints,
                 natGateways, spotInstanceRequests, networkAcls, managedPrefixLists, tags,
                 new InMemoryStorage<>(), new InMemoryStorage<>(), new InMemoryStorage<>(),
                 new InMemoryStorage<>(), new InMemoryStorage<>(), new InMemoryStorage<>(),
                 new InMemoryStorage<>(), new InMemoryStorage<>(), null);
+        this.dhcpOptions = dhcpOptions;
     }
 
     // Package-private for hermetic tests, transit-gateway-aware. The shorter overload above keeps its
@@ -1312,6 +1345,19 @@ public class Ec2Service implements ContainerTeardown, ResourceProvider, Resettab
         String seedScope = ownerAccountId + "::" + region;
         if (!seededAccountRegions.add(seedScope)) {
             return;
+        }
+        String defaultOptionsId = "dopt-default";
+        if (dhcpOptions.get(key(region, defaultOptionsId)).isEmpty()) {
+            DhcpOptions defaultOptions = new DhcpOptions();
+            defaultOptions.setDhcpOptionsId(defaultOptionsId);
+            defaultOptions.setRegion(region);
+            defaultOptions.setOwnerId(ownerAccountId);
+            defaultOptions.setConfigurations(List.of(
+                    new DhcpConfiguration("domain-name", List.of("us-east-1".equals(region)
+                            ? "ec2.internal" : region + ".compute.internal")),
+                    new DhcpConfiguration("domain-name-servers", List.of("AmazonProvidedDNS")),
+                    new DhcpConfiguration("ipv6-address-preferred-lease-time", List.of("140"))));
+            dhcpOptions.put(key(region, defaultOptionsId), defaultOptions);
         }
         // Already provisioned in a previous run and reloaded from persistent storage: the default
         // VPC (and everything else) is present, so don't re-seed and create duplicates (#1297).
@@ -5767,6 +5813,7 @@ public class Ec2Service implements ContainerTeardown, ResourceProvider, Resettab
         Set<String> keys = Set.of("domain-name", "domain-name-servers", "ntp-servers",
                 "netbios-name-servers", "netbios-node-type", "ipv6-address-preferred-lease-time");
         Set<String> seen = new HashSet<>();
+        List<DhcpConfiguration> validated = new ArrayList<>();
         for (DhcpConfiguration configuration : configurations) {
             if (configuration.getKey() == null || !keys.contains(configuration.getKey())
                     || !seen.add(configuration.getKey()) || configuration.getValues() == null
@@ -5774,20 +5821,64 @@ public class Ec2Service implements ContainerTeardown, ResourceProvider, Resettab
                     || configuration.getValues().stream().anyMatch(value -> value == null || value.isBlank())) {
                 throw new AwsException("InvalidParameterValue", "Invalid DHCP configuration", 400);
             }
+            String optionKey = configuration.getKey();
+            List<String> values = configuration.getValues();
+            if (Set.of("domain-name-servers", "ntp-servers", "netbios-name-servers").contains(optionKey)) {
+                values = values.stream().flatMap(value -> Arrays.stream(value.split(",", -1)))
+                        .map(String::trim).toList();
+            }
+            if (!validDhcpValues(optionKey, values)) {
+                throw new AwsException("InvalidParameterValue", "Invalid value for DHCP option " + optionKey, 400);
+            }
+            validated.add(new DhcpConfiguration(optionKey, List.copyOf(values)));
         }
         DhcpOptions options = new DhcpOptions();
         options.setDhcpOptionsId("dopt-" + randomHex(17));
         options.setRegion(region);
         options.setOwnerId(callerAccountId());
-        options.setConfigurations(configurations.stream()
-                .map(configuration -> new DhcpConfiguration(configuration.getKey(), configuration.getValues()))
-                .toList());
+        options.setConfigurations(validated);
         dhcpOptions.put(key(region, options.getDhcpOptionsId()), options);
         return options;
     }
 
+    private boolean validDhcpValues(String optionKey, List<String> values) {
+        if (values.isEmpty() || values.stream().anyMatch(String::isBlank)) {
+            return false;
+        }
+        return switch (optionKey) {
+            case "domain-name-servers" -> values.size() <= 4 &&
+                    (values.equals(List.of("AmazonProvidedDNS")) || values.stream().allMatch(this::isLiteralIp));
+            case "ntp-servers" -> values.size() <= 8 && values.stream().allMatch(this::isLiteralIp)
+                    && values.stream().filter(value -> !value.contains(":")).count() <= 4
+                    && values.stream().filter(value -> value.contains(":")).count() <= 4;
+            case "netbios-name-servers" -> values.size() <= 4 && values.stream().allMatch(this::isLiteralIp);
+            case "netbios-node-type" -> values.size() == 1 && Set.of("1", "2", "4", "8").contains(values.getFirst());
+            case "ipv6-address-preferred-lease-time" -> values.size() == 1 && validIpv6LeaseTime(values.getFirst());
+            default -> true;
+        };
+    }
+
+    private boolean isLiteralIp(String value) {
+        try {
+            InetAddress.ofLiteral(value);
+            return true;
+        } catch (IllegalArgumentException invalid) {
+            return false;
+        }
+    }
+
+    private boolean validIpv6LeaseTime(String value) {
+        try {
+            long seconds = Long.parseLong(value);
+            return seconds >= 140 && seconds <= Integer.MAX_VALUE;
+        } catch (NumberFormatException invalid) {
+            return false;
+        }
+    }
+
     public PaginatedResult<DhcpOptions> describeDhcpOptions(String region, List<String> ids,
             List<Map.Entry<String, List<String>>> filters, int maxResults, String nextToken) {
+        ensureDefaultResources(region);
         requireSupportedFilters(filterNames(filters), Set.of("dhcp-options-id", "owner-id", "key", "value",
                 "tag-key", "tag-value"));
         if (maxResults != 0 && (maxResults < 5 || maxResults > 1000)) {
@@ -5797,7 +5888,7 @@ public class Ec2Service implements ContainerTeardown, ResourceProvider, Resettab
             throw new AwsException("InvalidParameterCombination",
                     "DhcpOptionsId cannot be used with MaxResults", 400);
         }
-        int offset = decodeToken(nextToken);
+        String afterId = decodeDhcpOptionsToken(nextToken);
         List<DhcpOptions> all = new ArrayList<>(dhcpOptions.scan(k -> k.startsWith(region + "::")));
         all.sort(Comparator.comparing(DhcpOptions::getDhcpOptionsId));
         for (String id : ids) {
@@ -5806,13 +5897,30 @@ public class Ec2Service implements ContainerTeardown, ResourceProvider, Resettab
         List<DhcpOptions> matching = all.stream()
                 .filter(options -> ids.isEmpty() || ids.contains(options.getDhcpOptionsId()))
                 .filter(options -> filters.stream().allMatch(filter -> matchesDhcpOptionsFilter(region, options, filter)))
+                .filter(options -> afterId == null || options.getDhcpOptionsId().compareTo(afterId) > 0)
                 .toList();
-        if (offset > matching.size()) {
+        int end = maxResults == 0 ? matching.size() : Math.min(matching.size(), maxResults);
+        return new PaginatedResult<>(matching.subList(0, end),
+                end < matching.size() ? encodeDhcpOptionsToken(matching.get(end - 1).getDhcpOptionsId()) : null);
+    }
+
+    private String encodeDhcpOptionsToken(String lastId) {
+        return Base64.getEncoder().encodeToString(lastId.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private String decodeDhcpOptionsToken(String token) {
+        if (token == null || token.isEmpty()) {
+            return null;
+        }
+        try {
+            String id = new String(Base64.getDecoder().decode(token), StandardCharsets.UTF_8);
+            if (!id.matches("dopt-(default|[0-9a-f]{17})")) {
+                throw new IllegalArgumentException("Invalid DHCP options cursor");
+            }
+            return id;
+        } catch (IllegalArgumentException invalid) {
             throw new AwsException("InvalidParameterValue", "Invalid NextToken", 400);
         }
-        int end = maxResults == 0 ? matching.size() : Math.min(matching.size(), offset + maxResults);
-        return new PaginatedResult<>(matching.subList(offset, end),
-                end < matching.size() ? encodeToken(end) : null);
     }
 
     private boolean matchesDhcpOptionsFilter(String region, DhcpOptions options,
@@ -5839,17 +5947,26 @@ public class Ec2Service implements ContainerTeardown, ResourceProvider, Resettab
     }
 
     public void associateDhcpOptions(String region, String dhcpOptionsId, String vpcId) {
+        if (dhcpOptionsId == null || dhcpOptionsId.isBlank()) {
+            throw new AwsException("MissingParameter", "DhcpOptionsId is required", 400);
+        }
+        if (vpcId == null || vpcId.isBlank()) {
+            throw new AwsException("MissingParameter", "VpcId is required", 400);
+        }
         synchronized (attachmentTopologyLock(region)) {
             Vpc vpc = getRequiredVpc(region, vpcId);
             if (!"default".equals(dhcpOptionsId)) {
                 getRequiredDhcpOptions(region, dhcpOptionsId);
             }
-            vpc.setDhcpOptionsId("default".equals(dhcpOptionsId) ? "dopt-default" : dhcpOptionsId);
+            vpc.setDhcpOptionsId(dhcpOptionsId);
             vpcs.put(key(region, vpcId), vpc);
         }
     }
 
     public void deleteDhcpOptions(String region, String dhcpOptionsId) {
+        if (dhcpOptionsId == null || dhcpOptionsId.isBlank()) {
+            throw new AwsException("MissingParameter", "DhcpOptionsId is required", 400);
+        }
         synchronized (attachmentTopologyLock(region)) {
             getRequiredDhcpOptions(region, dhcpOptionsId);
             if (vpcs.scan(k -> k.startsWith(region + "::")).stream()

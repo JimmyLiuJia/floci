@@ -1690,22 +1690,55 @@ public class Ec2QueryHandler {
 
     private Response handleCreateDhcpOptions(MultivaluedMap<String, String> p, String region) {
         List<DhcpConfiguration> configurations = new ArrayList<>();
-        for (int i = 1; ; i++) {
+        for (int i : numberedIndices(p, "DhcpConfiguration.")) {
             String prefix = "DhcpConfiguration." + i;
             String key = p.getFirst(prefix + ".Key");
             if (key == null) {
-                break;
+                throw new AwsException("MissingParameter", prefix + ".Key is required", 400);
             }
-            configurations.add(new DhcpConfiguration(key, getList(p, prefix + ".Value")));
+            List<String> values = numberedIndices(p, prefix + ".Value.").stream()
+                    .map(index -> p.getFirst(prefix + ".Value." + index)).toList();
+            configurations.add(new DhcpConfiguration(key, values));
         }
         List<Tag> tags = parseTagsForResource(p, "dhcp-options");
         DhcpOptions options = service.createDhcpOptions(region, configurations);
-        applyResourceTags(tags, region, options.getDhcpOptionsId());
+        try {
+            applyResourceTags(tags, region, options.getDhcpOptionsId());
+        } catch (RuntimeException failure) {
+            try {
+                service.deleteDhcpOptions(region, options.getDhcpOptionsId());
+            } catch (RuntimeException cleanupFailure) {
+                failure.addSuppressed(cleanupFailure);
+            }
+            throw failure;
+        }
         return xmlResponse(new XmlBuilder()
                 .start("CreateDhcpOptionsResponse", AwsNamespaces.EC2)
                 .elem("requestId", UUID.randomUUID().toString())
                 .start("dhcpOptions").raw(dhcpOptionsXml(region, options)).end("dhcpOptions")
                 .end("CreateDhcpOptionsResponse").build());
+    }
+
+    private SortedSet<Integer> numberedIndices(MultivaluedMap<String, String> params, String prefix) {
+        SortedSet<Integer> indices = new TreeSet<>();
+        for (String name : params.keySet()) {
+            if (!name.startsWith(prefix)) {
+                continue;
+            }
+            String suffix = name.substring(prefix.length());
+            int dot = suffix.indexOf('.');
+            String number = dot < 0 ? suffix : suffix.substring(0, dot);
+            try {
+                int index = Integer.parseInt(number);
+                if (index < 1) {
+                    throw new NumberFormatException(number);
+                }
+                indices.add(index);
+            } catch (NumberFormatException invalid) {
+                throw new AwsException("InvalidParameterValue", "Invalid parameter index in " + name, 400);
+            }
+        }
+        return indices;
     }
 
     private Response handleDescribeDhcpOptions(MultivaluedMap<String, String> p, String region) {

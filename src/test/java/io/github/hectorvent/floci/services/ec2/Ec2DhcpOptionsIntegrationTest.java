@@ -145,6 +145,173 @@ class Ec2DhcpOptionsIntegrationTest {
     }
 
     @Test
+    void rejectedTagsDoNotLeaveAnOptionsSet() {
+        given()
+            .formParam("Action", "CreateDhcpOptions")
+            .formParam("DhcpConfiguration.1.Key", "domain-name")
+            .formParam("DhcpConfiguration.1.Value.1", "tag-rollback.example")
+            .formParam("TagSpecification.1.ResourceType", "dhcp-options")
+            .formParam("TagSpecification.1.Tag.1.Key", "oversized")
+            .formParam("TagSpecification.1.Tag.1.Value", "x".repeat(257))
+            .header("Authorization", AUTH_HEADER)
+        .when().post("/").then().statusCode(400);
+
+        given()
+            .formParam("Action", "DescribeDhcpOptions")
+            .formParam("Filter.1.Name", "value")
+            .formParam("Filter.1.Value.1", "tag-rollback.example")
+            .header("Authorization", AUTH_HEADER)
+        .when().post("/").then().statusCode(200)
+            .body("DescribeDhcpOptionsResponse.dhcpOptionsSet.item.size()", equalTo(0));
+    }
+
+    @Test
+    void missingRequiredIdsReturnMissingParameter() {
+        for (String action : List.of("AssociateDhcpOptions", "DeleteDhcpOptions")) {
+            given().formParam("Action", action).header("Authorization", AUTH_HEADER)
+                .when().post("/").then().statusCode(400).body(containsString("MissingParameter"));
+        }
+    }
+
+    @Test
+    void defaultVpcOptionsCanBeDescribed() {
+        String defaultId = given()
+            .formParam("Action", "DescribeVpcs")
+            .formParam("Filter.1.Name", "is-default")
+            .formParam("Filter.1.Value.1", "true")
+            .header("Authorization", AUTH_HEADER)
+        .when().post("/").then().statusCode(200).extract()
+            .xmlPath().getString("DescribeVpcsResponse.vpcSet.item.dhcpOptionsId");
+
+        given()
+            .formParam("Action", "DescribeDhcpOptions")
+            .formParam("DhcpOptionsId.1", defaultId)
+            .header("Authorization", AUTH_HEADER)
+        .when().post("/").then().statusCode(200)
+            .body("DescribeDhcpOptionsResponse.dhcpOptionsSet.item.dhcpOptionsId", equalTo(defaultId))
+            .body(containsString("AmazonProvidedDNS"));
+    }
+
+    @Test
+    void associatingDefaultMeansNoOptionsInsteadOfTheRegionalDefaultSet() {
+        String vpcId = given()
+            .formParam("Action", "CreateVpc")
+            .formParam("CidrBlock", "10.253.0.0/16")
+            .header("Authorization", AUTH_HEADER)
+        .when().post("/").then().statusCode(200).extract()
+            .xmlPath().getString("CreateVpcResponse.vpc.vpcId");
+        try {
+            given()
+                .formParam("Action", "AssociateDhcpOptions")
+                .formParam("DhcpOptionsId", "default")
+                .formParam("VpcId", vpcId)
+                .header("Authorization", AUTH_HEADER)
+            .when().post("/").then().statusCode(200);
+            given()
+                .formParam("Action", "DescribeVpcs")
+                .formParam("VpcId.1", vpcId)
+                .header("Authorization", AUTH_HEADER)
+            .when().post("/").then().statusCode(200)
+                .body("DescribeVpcsResponse.vpcSet.item.dhcpOptionsId", equalTo("default"));
+        } finally {
+            given()
+                .formParam("Action", "DeleteVpc")
+                .formParam("VpcId", vpcId)
+                .header("Authorization", AUTH_HEADER)
+            .when().post("/").then().statusCode(200);
+        }
+    }
+
+    @Test
+    void numberedConfigurationsDoNotSilentlyDiscardLaterEntries() {
+        String id = given()
+            .formParam("Action", "CreateDhcpOptions")
+            .formParam("DhcpConfiguration.1.Key", "domain-name")
+            .formParam("DhcpConfiguration.1.Value.1", "numbered.example")
+            .formParam("DhcpConfiguration.3.Key", "netbios-node-type")
+            .formParam("DhcpConfiguration.3.Value.1", "2")
+            .header("Authorization", AUTH_HEADER)
+        .when().post("/").then().statusCode(200)
+            .body(containsString("<key>netbios-node-type</key>"))
+            .extract().xmlPath().getString("CreateDhcpOptionsResponse.dhcpOptions.dhcpOptionsId");
+        deleteOptions(id);
+    }
+
+    @Test
+    void invalidNetbiosNodeTypeIsRejected() {
+        given()
+            .formParam("Action", "CreateDhcpOptions")
+            .formParam("DhcpConfiguration.1.Key", "netbios-node-type")
+            .formParam("DhcpConfiguration.1.Value.1", "3")
+            .header("Authorization", AUTH_HEADER)
+        .when().post("/").then().statusCode(400).body(containsString("InvalidParameterValue"));
+    }
+
+    @Test
+    void invalidDnsAddressAndLeaseTimeAreRejected() {
+        for (String[] configuration : List.of(
+                new String[] {"domain-name-servers", "not-an-ip"},
+                new String[] {"ipv6-address-preferred-lease-time", "139"})) {
+            given()
+                .formParam("Action", "CreateDhcpOptions")
+                .formParam("DhcpConfiguration.1.Key", configuration[0])
+                .formParam("DhcpConfiguration.1.Value.1", configuration[1])
+                .header("Authorization", AUTH_HEADER)
+            .when().post("/").then().statusCode(400).body(containsString("InvalidParameterValue"));
+        }
+    }
+
+    @Test
+    void commaSeparatedDnsAddressesAreReturnedAsSeparateValues() {
+        String id = given()
+            .formParam("Action", "CreateDhcpOptions")
+            .formParam("DhcpConfiguration.1.Key", "domain-name-servers")
+            .formParam("DhcpConfiguration.1.Value.1", "10.2.5.1,10.2.5.2")
+            .header("Authorization", AUTH_HEADER)
+        .when().post("/").then().statusCode(200)
+            .body(containsString("<value>10.2.5.1</value>"))
+            .body(containsString("<value>10.2.5.2</value>"))
+            .extract().xmlPath().getString("CreateDhcpOptionsResponse.dhcpOptions.dhcpOptionsId");
+        deleteOptions(id);
+    }
+
+    @Test
+    void deletingAnEarlierPageItemDoesNotSkipTheNextPage() {
+        List<String> ids = new ArrayList<>();
+        try {
+            for (int i = 0; i < 6; i++) {
+                ids.add(createOptions("deletion-page.example"));
+            }
+            Response first = given()
+                .formParam("Action", "DescribeDhcpOptions")
+                .formParam("Filter.1.Name", "value")
+                .formParam("Filter.1.Value.1", "deletion-page.example")
+                .formParam("MaxResults", "5")
+                .header("Authorization", AUTH_HEADER)
+            .when().post("/");
+            first.then().statusCode(200);
+            List<String> firstIds = first.xmlPath().getList(
+                    "DescribeDhcpOptionsResponse.dhcpOptionsSet.item.dhcpOptionsId");
+            String unseenId = ids.stream().filter(id -> !firstIds.contains(id)).findFirst().orElseThrow();
+            String token = first.xmlPath().getString("DescribeDhcpOptionsResponse.nextToken");
+            deleteOptions(firstIds.getFirst());
+            ids.remove(firstIds.getFirst());
+
+            given()
+                .formParam("Action", "DescribeDhcpOptions")
+                .formParam("Filter.1.Name", "value")
+                .formParam("Filter.1.Value.1", "deletion-page.example")
+                .formParam("MaxResults", "5")
+                .formParam("NextToken", token)
+                .header("Authorization", AUTH_HEADER)
+            .when().post("/").then().statusCode(200)
+                .body("DescribeDhcpOptionsResponse.dhcpOptionsSet.item.dhcpOptionsId", equalTo(unseenId));
+        } finally {
+            ids.forEach(this::deleteOptions);
+        }
+    }
+
+    @Test
     void awsSdkParsesCreatedAndDescribedOptions() {
         try (Ec2Client client = Ec2Client.builder()
                 .endpointOverride(URI.create("http://localhost:" + RestAssured.port))
