@@ -9,6 +9,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.TestMethodOrder;
 
+import java.util.List;
+
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
@@ -374,5 +376,35 @@ class ApplicationAutoScalingIntegrationTest {
         call("PutScheduledAction")
             .body("{ \"ServiceNamespace\": \"ecs\" }")
         .when().post("/").then().statusCode(400);
+    }
+
+    @Test
+    @Order(16)
+    void invalidPaginationTokensReturnTheModeledError() {
+        for (String action : List.of("DescribeScalableTargets", "DescribeScalingPolicies")) {
+            for (String token : List.of("", "not!base64")) {
+                call(action)
+                    .body("{ \"ServiceNamespace\": \"ecs\", \"NextToken\": \"%s\" }".formatted(token))
+                .when().post("/").then().statusCode(400)
+                    .body("__type", equalTo("InvalidNextTokenException"));
+            }
+        }
+    }
+
+    @Test
+    @Order(17)
+    void pageSizeLimitsAreSpecificToEachOperation() {
+        call("DescribeScalableTargets")
+            .body("{ \"ServiceNamespace\": \"ecs\", \"MaxResults\": 50 }")
+        .when().post("/").then().statusCode(200);
+
+        call("DescribeScalingPolicies")
+            .body("{ \"ServiceNamespace\": \"ecs\", \"MaxResults\": 10 }")
+        .when().post("/").then().statusCode(200);
+
+        call("DescribeScalingPolicies")
+            .body("{ \"ServiceNamespace\": \"ecs\", \"MaxResults\": 11 }")
+        .when().post("/").then().statusCode(400)
+            .body("__type", equalTo("ValidationException"));
     }
 }
