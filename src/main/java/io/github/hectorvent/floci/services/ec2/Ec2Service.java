@@ -1394,9 +1394,6 @@ public class Ec2Service implements ContainerTeardown, ResourceProvider, Resettab
     public void ensureDefaultResources(String region) {
         String ownerAccountId = callerAccountId();
         String seedScope = ownerAccountId + "::" + region;
-        if (!seededAccountRegions.add(seedScope)) {
-            return;
-        }
         String defaultOptionsId = "dopt-default";
         if (dhcpOptions.get(key(region, defaultOptionsId)).isEmpty()) {
             DhcpOptions defaultOptions = new DhcpOptions();
@@ -1408,6 +1405,9 @@ public class Ec2Service implements ContainerTeardown, ResourceProvider, Resettab
                     new DhcpConfiguration("domain-name-servers", List.of("AmazonProvidedDNS")),
                     new DhcpConfiguration("ipv6-address-preferred-lease-time", List.of("140"))));
             dhcpOptions.put(key(region, defaultOptionsId), defaultOptions);
+        }
+        if (!seededAccountRegions.add(seedScope)) {
+            return;
         }
         // Already provisioned in a previous run and reloaded from persistent storage: the default
         // VPC (and everything else) is present, so don't re-seed and create duplicates (#1297).
