@@ -5453,12 +5453,7 @@ public class S3Service implements Resettable, ResourceProvider {
 
     /** Returns whether the bucket policy grants public access according to S3 policy-status rules. */
     public boolean isBucketPolicyPublic(String bucketName) {
-        Bucket bucket = resolveBucket(bucketName)
-                .orElseThrow(() -> new AwsException("NoSuchBucket", "The specified bucket does not exist.", 404));
-        if (bucket.getPolicy() == null) {
-            throw new AwsException("NoSuchBucketPolicy", "The bucket policy does not exist", 404);
-        }
-        return S3PublicAccessEvaluator.policyIsPublic(objectMapper, bucket.getPolicy());
+        return S3PublicAccessEvaluator.policyIsPublic(objectMapper, getBucketPolicy(bucketName));
     }
 
     /**

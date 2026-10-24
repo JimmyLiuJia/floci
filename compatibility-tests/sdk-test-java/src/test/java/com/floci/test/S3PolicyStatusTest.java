@@ -9,8 +9,6 @@ import software.amazon.awssdk.services.s3.model.GetBucketPolicyStatusResponse;
 import software.amazon.awssdk.services.s3.model.PutBucketPolicyRequest;
 import software.amazon.awssdk.services.s3.model.S3Exception;
 
-import java.util.UUID;
-
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -19,7 +17,7 @@ class S3PolicyStatusTest {
 
     @Test
     void decodesPolicyStatusRootElement() {
-        String bucket = bucketName();
+        String bucket = TestFixtures.uniqueName("sdk-policy-status");
         String policy = """
                 {"Version":"2012-10-17","Statement":[{"Effect":"Allow",
                 "Principal":"*","Action":"s3:GetObject","Resource":"arn:aws:s3:::%s/*"}]}
@@ -45,7 +43,7 @@ class S3PolicyStatusTest {
 
     @Test
     void reportsMissingBucketPolicy() {
-        String bucket = bucketName();
+        String bucket = TestFixtures.uniqueName("sdk-policy-status");
         try (S3Client s3 = TestFixtures.s3Client()) {
             s3.createBucket(CreateBucketRequest.builder().bucket(bucket).build());
 
@@ -60,9 +58,5 @@ class S3PolicyStatusTest {
                 // The compatibility runner may retain state after a failed assertion.
             }
         }
-    }
-
-    private static String bucketName() {
-        return "sdk-policy-status-" + UUID.randomUUID().toString().replace("-", "");
     }
 }
