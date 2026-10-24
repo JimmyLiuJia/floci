@@ -1353,8 +1353,7 @@ public class Ec2Service implements ContainerTeardown, ResourceProvider, Resettab
             defaultOptions.setRegion(region);
             defaultOptions.setOwnerId(ownerAccountId);
             defaultOptions.setConfigurations(List.of(
-                    new DhcpConfiguration("domain-name", List.of("us-east-1".equals(region)
-                            ? "ec2.internal" : region + ".compute.internal")),
+                    new DhcpConfiguration("domain-name", List.of(AwsRegions.ec2PrivateDnsDomain(region))),
                     new DhcpConfiguration("domain-name-servers", List.of("AmazonProvidedDNS")),
                     new DhcpConfiguration("ipv6-address-preferred-lease-time", List.of("140"))));
             dhcpOptions.put(key(region, defaultOptionsId), defaultOptions);
