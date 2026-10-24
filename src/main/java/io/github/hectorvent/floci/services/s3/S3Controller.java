@@ -648,11 +648,9 @@ public class S3Controller {
                 s3Service.authorizeBucketRead(bucket, "s3:GetBucketPolicyStatus", authorization);
                 XmlBuilder xml = new XmlBuilder()
                         .raw("<?xml version=\"1.0\" encoding=\"UTF-8\"?>")
-                        .start("GetBucketPolicyStatusOutput", AwsNamespaces.S3)
                         .start("PolicyStatus")
                         .elem("IsPublic", s3Service.isBucketPolicyPublic(bucket))
-                        .end("PolicyStatus")
-                        .end("GetBucketPolicyStatusOutput");
+                        .end("PolicyStatus");
                 return Response.ok(xml.build()).type(MediaType.APPLICATION_XML).build();
             }
             if (hasQueryParam(uriInfo, "policy")) {

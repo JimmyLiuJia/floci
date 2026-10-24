@@ -7,20 +7,21 @@ import java.util.UUID;
 
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.startsWith;
 
 /** Regression coverage for the S3 GetBucketPolicyStatus REST subresource. */
 @QuarkusTest
 class S3PolicyStatusIntegrationTest {
 
     @Test
-    void reportsFalseWhenTheBucketHasNoPolicy() {
+    void reportsNoSuchBucketPolicyWhenTheBucketHasNoPolicy() {
         String bucket = "policy-status-private-" + UUID.randomUUID();
         given().when().put("/" + bucket).then().statusCode(200);
 
         given().when().get("/" + bucket + "?policyStatus")
                 .then()
-                .statusCode(200)
-                .body(containsString("<IsPublic>false</IsPublic>"));
+                .statusCode(404)
+                .body(containsString("<Code>NoSuchBucketPolicy</Code>"));
     }
 
     @Test
@@ -38,7 +39,7 @@ class S3PolicyStatusIntegrationTest {
         given().when().get("/" + bucket + "?policyStatus")
                 .then()
                 .statusCode(200)
-                .body(containsString("<PolicyStatus>"))
+                .body(startsWith("<?xml version=\"1.0\" encoding=\"UTF-8\"?><PolicyStatus"))
                 .body(containsString("<IsPublic>true</IsPublic>"));
     }
 }

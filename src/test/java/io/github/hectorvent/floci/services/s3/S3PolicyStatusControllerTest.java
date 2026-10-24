@@ -69,6 +69,8 @@ class S3PolicyStatusControllerTest {
         Response response = controller.listObjects(bucket, null, null, null, null, null, null, null,
                 null, null, null, uriInfo, headers);
 
-        assertTrue(response.getEntity().toString().contains("<PolicyStatus><IsPublic>true</IsPublic></PolicyStatus>"));
+        String entity = response.getEntity().toString();
+        assertTrue(entity.startsWith("<?xml version=\"1.0\" encoding=\"UTF-8\"?><PolicyStatus"));
+        assertTrue(entity.contains("<IsPublic>true</IsPublic></PolicyStatus>"));
     }
 }
