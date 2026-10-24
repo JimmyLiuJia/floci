@@ -68,6 +68,8 @@ import static org.mockito.Mockito.when;
  */
 class Ec2ServicePersistenceTest {
 
+    private static final String REGION = "us-east-1";
+
     @Test
     void dhcpOptionsSurviveRestart(@TempDir Path dir) {
         Ec2Service original = newService(dir);
@@ -79,8 +81,6 @@ class Ec2ServicePersistenceTest {
         assertEquals(id, restored.getDhcpOptionsId());
         assertEquals("persistent.example", restored.getConfigurations().getFirst().getValues().getFirst());
     }
-
-    private static final String REGION = "us-east-1";
 
     @Test
     void elasticIpMetadataSurvivesRestart(@TempDir Path dir) {

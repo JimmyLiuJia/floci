@@ -301,7 +301,7 @@ naming different VPCs find nothing.
 | DescribeVpcAttribute | Returns a supported VPC attribute. |
 | CreateDhcpOptions | Creates a DHCP options set with the supplied configurations and optional tags. |
 | DescribeDhcpOptions | Lists DHCP options sets by ID or filters, with paginated results. |
-| AssociateDhcpOptions | Associates an options set with a VPC; `default` removes the custom association. |
+| AssociateDhcpOptions | Associates an options set with a VPC; `default` leaves the VPC with no DHCP options. |
 | DeleteDhcpOptions | Deletes an unassociated DHCP options set. |
 | DescribeVpcEndpointServices | Lists common AWS interface endpoint services and S3 (gateway and interface) in every availability zone, named per partition (see [Partitions](../configuration/partitions.md)). A `ServiceName` filter is echoed back as asked. |
 | CreateVpcEndpoint | Creates a VPC endpoint record, including its `PolicyDocument` and the per-subnet IPv4 and IPv6 addresses named by `SubnetConfiguration.N`. `IpAddressType` defaults to `ipv4`. Interface and gateway address types are stored as metadata. Synthesized endpoint interfaces still carry IPv4 only; IPv6 networking is not emulated. An `Ipv4` value outside the named subnet's CIDR, or among the first four or the last address AWS reserves in it, is rejected with `InvalidParameterValue`. |

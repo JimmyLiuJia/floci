@@ -80,6 +80,12 @@ class Ec2DhcpOptionsIntegrationTest {
             .header("Authorization", AUTH_HEADER)
         .when().post("/").then().statusCode(200).extract()
             .xmlPath().getString("DescribeVpcsResponse.vpcSet.item.vpcId");
+        String originalOptionsId = given()
+            .formParam("Action", "DescribeVpcs")
+            .formParam("VpcId.1", vpcId)
+            .header("Authorization", AUTH_HEADER)
+        .when().post("/").then().statusCode(200).extract()
+            .xmlPath().getString("DescribeVpcsResponse.vpcSet.item.dhcpOptionsId");
         try {
             given()
                 .formParam("Action", "AssociateDhcpOptions")
@@ -106,12 +112,18 @@ class Ec2DhcpOptionsIntegrationTest {
         } finally {
             given()
                 .formParam("Action", "AssociateDhcpOptions")
-                .formParam("DhcpOptionsId", "default")
+                .formParam("DhcpOptionsId", originalOptionsId)
                 .formParam("VpcId", vpcId)
                 .header("Authorization", AUTH_HEADER)
             .when().post("/").then().statusCode(200);
             deleteOptions(id);
         }
+        given()
+            .formParam("Action", "DescribeVpcs")
+            .formParam("VpcId.1", vpcId)
+            .header("Authorization", AUTH_HEADER)
+        .when().post("/").then().statusCode(200)
+            .body("DescribeVpcsResponse.vpcSet.item.dhcpOptionsId", equalTo(originalOptionsId));
     }
 
     @Test
