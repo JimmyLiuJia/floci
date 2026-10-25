@@ -108,10 +108,10 @@ public class SnsCfnProvisioner implements CfnResourceProvisioner {
             }
         }
 
-        String requestedTopicName = topicName;
-        boolean created = !ctx.isUpdate() && snsService.listTopics(ctx.region()).stream()
-                .noneMatch(existing -> requestedTopicName.equals(existing.getName()));
-        Topic topic = snsService.createTopic(topicName, attributes, Map.of(), ctx.region());
+        SnsService.TopicCreation creation = snsService.createTopicWithStatus(
+                topicName, attributes, Map.of(), ctx.region());
+        Topic topic = creation.topic();
+        boolean created = creation.created();
         // createTopic leaves an existing topic untouched, so an update writes the mutable
         // attributes itself. A property the template dropped is reset, not left standing.
         if (ctx.isUpdate()) {
@@ -152,10 +152,10 @@ public class SnsCfnProvisioner implements CfnResourceProvisioner {
                                               List<SubscriptionTarget> desired, List<Subscription> existing,
                                               Set<String> added) {
         for (SubscriptionTarget target : desired) {
-            boolean present = existing.stream().anyMatch(sub -> target.matches(sub));
-            Subscription sub = snsService.subscribe(topicArn, target.protocol(), target.endpoint(),
-                    region, Map.of());
-            if (!present) {
+            SnsService.SubscriptionCreation creation = snsService.subscribeWithStatus(
+                    topicArn, target.protocol(), target.endpoint(), region, Map.of());
+            Subscription sub = creation.subscription();
+            if (creation.created()) {
                 added.add(sub.getSubscriptionArn());
                 r.getAttributes().put(INLINE_SUBSCRIPTION_PREFIX + sub.getSubscriptionArn(), "true");
             }

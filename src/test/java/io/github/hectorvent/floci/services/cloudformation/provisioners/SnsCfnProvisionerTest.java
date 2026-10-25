@@ -70,7 +70,15 @@ class SnsCfnProvisionerTest {
         });
         when(engine.resolveNodeOmittingNoValue(any())).thenAnswer(i -> i.getArgument(0));
         when(sns.listTopics(REGION)).thenReturn(List.of());
+        when(sns.createTopicWithStatus(anyString(), anyMap(), anyMap(), eq(REGION)))
+                .thenAnswer(i -> new SnsService.TopicCreation(
+                        sns.createTopic(i.getArgument(0), i.getArgument(1), i.getArgument(2), i.getArgument(3)),
+                        false));
         when(sns.listSubscriptionsByTopic(TOPIC_ARN, REGION)).thenReturn(List.of());
+        when(sns.subscribeWithStatus(anyString(), anyString(), anyString(), eq(REGION), anyMap()))
+                .thenAnswer(i -> new SnsService.SubscriptionCreation(
+                        sns.subscribe(i.getArgument(0), i.getArgument(1), i.getArgument(2), i.getArgument(3),
+                                i.getArgument(4)), true));
         ctx = new ProvisionContext(engine, REGION, "000000000000", "my-stack");
     }
 
@@ -205,6 +213,8 @@ class SnsCfnProvisionerTest {
     void failedInlineSubscriptionRemovesNewTopic() {
         when(sns.createTopic(eq("events"), anyMap(), anyMap(), eq(REGION)))
                 .thenReturn(topic(TOPIC_ARN));
+        when(sns.createTopicWithStatus(eq("events"), anyMap(), anyMap(), eq(REGION)))
+                .thenReturn(new SnsService.TopicCreation(topic(TOPIC_ARN), true));
         when(sns.subscribe(eq(TOPIC_ARN), eq("sqs"), eq("arn:queue"), eq(REGION), anyMap()))
                 .thenReturn(subscription("arn:first"));
         when(sns.subscribe(eq(TOPIC_ARN), eq("https"), eq("http://wrong"), eq(REGION), anyMap()))
@@ -238,6 +248,53 @@ class SnsCfnProvisionerTest {
                 """));
 
         verify(sns).unsubscribe("arn:first", REGION);
+        verify(sns, never()).deleteTopic(TOPIC_ARN, REGION);
+    }
+
+    @Test
+    void topicCreationStatusAvoidsListThenCreateRace() {
+        Topic createdByAnotherCaller = topic(TOPIC_ARN);
+        createdByAnotherCaller.setName("events");
+        when(sns.createTopic(eq("events"), anyMap(), anyMap(), eq(REGION)))
+                .thenReturn(createdByAnotherCaller);
+        when(sns.createTopicWithStatus(eq("events"), anyMap(), anyMap(), eq(REGION)))
+                .thenReturn(new SnsService.TopicCreation(createdByAnotherCaller, false));
+        when(sns.subscribe(eq(TOPIC_ARN), eq("https"), eq("http://wrong"), eq(REGION), anyMap()))
+                .thenThrow(new AwsException("InvalidParameter", "Endpoint scheme mismatch", 400));
+        when(sns.subscribeWithStatus(eq(TOPIC_ARN), eq("https"), eq("http://wrong"), eq(REGION), anyMap()))
+                .thenThrow(new AwsException("InvalidParameter", "Endpoint scheme mismatch", 400));
+
+        assertThrows(AwsException.class, () -> provision("AWS::SNS::Topic", """
+                {"TopicName":"events","Subscription":[
+                  {"Protocol":"https","Endpoint":"http://wrong"}]}
+                """));
+
+        verify(sns, never()).deleteTopic(TOPIC_ARN, REGION);
+        verify(sns, never()).listTopics(REGION);
+    }
+
+    @Test
+    void inlineSubscriptionCreationStatusProtectsAnotherCaller() {
+        when(sns.createTopic(eq("events"), anyMap(), anyMap(), eq(REGION)))
+                .thenReturn(topic(TOPIC_ARN));
+        when(sns.createTopicWithStatus(eq("events"), anyMap(), anyMap(), eq(REGION)))
+                .thenReturn(new SnsService.TopicCreation(topic(TOPIC_ARN), false));
+        when(sns.subscribe(eq(TOPIC_ARN), eq("sqs"), eq("arn:queue"), eq(REGION), anyMap()))
+                .thenReturn(subscription("arn:other"));
+        when(sns.subscribeWithStatus(eq(TOPIC_ARN), eq("sqs"), eq("arn:queue"), eq(REGION), anyMap()))
+                .thenReturn(new SnsService.SubscriptionCreation(subscription("arn:other"), false));
+        when(sns.subscribe(eq(TOPIC_ARN), eq("https"), eq("http://wrong"), eq(REGION), anyMap()))
+                .thenThrow(new AwsException("InvalidParameter", "Endpoint scheme mismatch", 400));
+        when(sns.subscribeWithStatus(eq(TOPIC_ARN), eq("https"), eq("http://wrong"), eq(REGION), anyMap()))
+                .thenThrow(new AwsException("InvalidParameter", "Endpoint scheme mismatch", 400));
+
+        assertThrows(AwsException.class, () -> provision("AWS::SNS::Topic", """
+                {"TopicName":"events","Subscription":[
+                  {"Protocol":"sqs","Endpoint":"arn:queue"},
+                  {"Protocol":"https","Endpoint":"http://wrong"}]}
+                """));
+
+        verify(sns, never()).unsubscribe("arn:other", REGION);
         verify(sns, never()).deleteTopic(TOPIC_ARN, REGION);
     }
 
