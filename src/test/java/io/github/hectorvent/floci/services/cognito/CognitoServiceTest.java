@@ -2606,9 +2606,9 @@ class CognitoServiceTest {
                 "email", "admin@example.com"));
 
         CognitoUser updated = fixture.service().adminGetUser(fixture.pool().getId(), "alice");
-        assertEquals("admin@example.com", updated.getAttributes().get("email"));
+        assertEquals("old@example.com", updated.getAttributes().get("email"));
+        assertEquals("admin@example.com", updated.getPendingAttributes().get("email"));
         assertEquals("updated", updated.getAttributes().get("custom:note"));
-        assertFalse(updated.getPendingAttributes().containsKey("email"));
         assertEquals("+12025550101", updated.getPendingAttributes().get("phone_number"));
         verify(verificationCodeService, times(2)).invalidatePrevious(
                 fixture.pool().getId(), "alice",

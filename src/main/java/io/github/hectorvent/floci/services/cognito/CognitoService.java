@@ -2676,15 +2676,25 @@ public class CognitoService implements ResourceProvider {
     }
 
     public void adminUpdateUserAttributes(String userPoolId, String username, Map<String, String> attributes) {
+        adminUpdateUserAttributes(userPoolId, username, attributes, Map.of());
+    }
+
+    public void adminUpdateUserAttributes(String userPoolId, String username, Map<String, String> attributes,
+                                          Map<String, String> clientMetadata) {
         CognitoUser resolvedUser = adminGetUser(userPoolId, username);
+        List<AttributeCodeMessage> messages = new ArrayList<>();
+        AttributeCodeSending sending;
         synchronized (userLock(userPoolId, resolvedUser.getUsername())) {
             adminUpdateUserAttributesUnderUserLock(
-                    userPoolId, resolvedUser.getUsername(), attributes);
+                    userPoolId, resolvedUser.getUsername(), attributes, clientMetadata, messages);
+            sending = attributeCodeSending(userPoolId, resolvedUser.getUsername(), null);
         }
+        sendAttributeCodeMessages(sending, "CustomMessage_UpdateUserAttribute", clientMetadata, messages);
     }
 
     private void adminUpdateUserAttributesUnderUserLock(
-            String userPoolId, String username, Map<String, String> attributes) {
+            String userPoolId, String username, Map<String, String> attributes,
+            Map<String, String> clientMetadata, List<AttributeCodeMessage> messages) {
         CognitoUser user = adminGetUser(userPoolId, username);
         UserPool pool = describeUserPool(userPoolId);
         validateEmailAttribute(attributes, true);
@@ -2701,20 +2711,50 @@ public class CognitoService implements ResourceProvider {
                 }
             }
         }
-        attributes.keySet().forEach(attributeName ->
-                clearPendingAttributeVerification(userPoolId, user, attributeName));
         for (Map.Entry<String, String> attribute : attributes.entrySet()) {
             String attributeName = attribute.getKey();
             String value = attribute.getValue();
+            boolean contact = isVerifiableContactAttribute(attributeName);
             if (blankToNull(value) == null) {
                 user.getAttributes().remove(attributeName);
                 user.getAttributes().remove(attributeName + "_verified");
+                clearPendingAttributeVerification(userPoolId, user, attributeName);
+            } else if (contact && shouldVerifyAttribute(pool, attributeName)
+                    && !isExplicitlyVerified(attributes, attributeName)) {
+                clearPendingAttributeVerification(userPoolId, user, attributeName);
+                ensureVerificationWiring();
+                String verificationCode = verificationCodeService.issue(
+                        userPoolId, user.getUsername(), verificationPurpose(attributeName), Duration.ofHours(24));
+                dispatchAttributeVerificationCode(pool, null, user, attributeName, value,
+                        verificationPurpose(attributeName), verificationCode,
+                        "CustomEmailSender_AdminUpdateUserAttribute", clientMetadata, messages);
+                if (requiresVerificationBeforeUpdate(pool, attributeName)) {
+                    user.getPendingAttributes().put(attributeName, value);
+                } else {
+                    user.getAttributes().put(attributeName, value);
+                    user.getAttributes().put(attributeName + "_verified", "false");
+                    user.getPendingAttributes().remove(attributeName);
+                }
             } else {
+                clearPendingAttributeVerification(userPoolId, user, attributeName);
                 user.getAttributes().put(attributeName, value);
+                if (contact && isExplicitlyVerified(attributes, attributeName)) {
+                    user.getAttributes().put(attributeName + "_verified", "true");
+                    user.getPendingAttributes().remove(attributeName);
+                }
             }
         }
         user.setLastModifiedDate(System.currentTimeMillis() / 1000L);
         userStore.put(userKey(userPoolId, user.getUsername()), user);
+    }
+
+    private boolean isExplicitlyVerified(Map<String, String> attributes, String attributeName) {
+        return "true".equalsIgnoreCase(attributes.get(attributeName + "_verified"));
+    }
+
+    private boolean shouldVerifyAttribute(UserPool pool, String attributeName) {
+        return pool.getAutoVerifiedAttributes() != null
+                && pool.getAutoVerifiedAttributes().contains(attributeName);
     }
 
     public void adminDeleteUserAttributes(String userPoolId, String username, List<String> attributeNames) {

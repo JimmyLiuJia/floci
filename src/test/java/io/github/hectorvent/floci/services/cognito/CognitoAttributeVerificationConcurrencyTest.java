@@ -250,9 +250,10 @@ class CognitoAttributeVerificationConcurrencyTest {
             verify.get(5, TimeUnit.SECONDS);
             adminUpdate.get(5, TimeUnit.SECONDS);
 
-            assertEquals(ADMIN_EMAIL, harness.user().getAttributes().get("email"),
+            assertEquals(FIRST_EMAIL, harness.user().getAttributes().get("email"),
                     "verification finishing later must not overwrite a completed admin update");
-            assertNull(harness.user().getPendingAttributes().get("email"));
+            assertEquals(ADMIN_EMAIL, harness.user().getPendingAttributes().get("email"),
+                    "the completed admin update remains pending until its new value is verified");
         } finally {
             releaseConsume.countDown();
             executor.shutdownNow();
