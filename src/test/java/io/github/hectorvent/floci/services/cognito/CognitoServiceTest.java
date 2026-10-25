@@ -2470,9 +2470,9 @@ class CognitoServiceTest {
     void expiredPendingEmailCodeLeavesActiveAttributeAndVerifiedFlagUnchanged() {
         VerificationCodeService verificationCodeService = inlineMock(VerificationCodeService.class);
         CognitoMessageDispatcher messageDispatcher = inlineMock(CognitoMessageDispatcher.class);
-        when(verificationCodeService.issue(any(), any(),
+        when(verificationCodeService.issueTracked(any(), any(),
                 eq(VerificationCode.Purpose.EMAIL_ATTRIBUTE_VERIFICATION), any()))
-                .thenReturn("123456");
+                .thenReturn(new VerificationCodeService.IssuedCode("123456", "test-hash"));
 
         CognitoService serviceWithVerification = new CognitoService(
                 new InMemoryStorage<>(),
@@ -2534,9 +2534,9 @@ class CognitoServiceTest {
     void verificationCodeForRequiredEmailUpdateUsesPendingDestination() {
         VerificationCodeService verificationCodeService = inlineMock(VerificationCodeService.class);
         CognitoMessageDispatcher messageDispatcher = inlineMock(CognitoMessageDispatcher.class);
-        when(verificationCodeService.issue(any(), any(),
+        when(verificationCodeService.issueTracked(any(), any(),
                 eq(VerificationCode.Purpose.EMAIL_ATTRIBUTE_VERIFICATION), any()))
-                .thenReturn("123456");
+                .thenReturn(new VerificationCodeService.IssuedCode("123456", "test-hash"));
 
         CognitoService serviceWithVerification = new CognitoService(
                 new InMemoryStorage<>(),
@@ -2610,7 +2610,7 @@ class CognitoServiceTest {
         assertEquals("admin@example.com", updated.getPendingAttributes().get("email"));
         assertEquals("updated", updated.getAttributes().get("custom:note"));
         assertEquals("+12025550101", updated.getPendingAttributes().get("phone_number"));
-        verify(verificationCodeService, times(2)).invalidatePrevious(
+        verify(verificationCodeService).invalidatePrevious(
                 fixture.pool().getId(), "alice",
                 VerificationCode.Purpose.EMAIL_ATTRIBUTE_VERIFICATION);
         verify(verificationCodeService, never()).invalidatePrevious(
@@ -2676,6 +2676,8 @@ class CognitoServiceTest {
             VerificationCodeService verificationCodeService,
             CognitoMessageDispatcher messageDispatcher) {
         when(verificationCodeService.issue(any(), any(), any(), any())).thenReturn("123456");
+        when(verificationCodeService.issueTracked(any(), any(), any(), any()))
+                .thenReturn(new VerificationCodeService.IssuedCode("123456", "test-hash"));
         CognitoService serviceWithVerification = new CognitoService(
                 new InMemoryStorage<>(),
                 new InMemoryStorage<>(),

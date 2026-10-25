@@ -178,6 +178,33 @@ class VerificationCodeServiceTest {
     }
 
     @Test
+    void invalidateIfCurrent_preservesNewerCode() {
+        VerificationCode.Purpose purpose = VerificationCode.Purpose.PHONE_ATTRIBUTE_VERIFICATION;
+        VerificationCodeService.IssuedCode first = service.issueTracked(
+                "pool", "alice", purpose, Duration.ofHours(24));
+        service.invalidatePrevious("pool", "alice", purpose);
+        VerificationCodeService.IssuedCode newer = service.issueTracked(
+                "pool", "alice", purpose, Duration.ofHours(24));
+
+        service.invalidateIfCurrent("pool", "alice", purpose, first);
+
+        assertDoesNotThrow(() -> service.consume("pool", "alice", purpose, newer.code()));
+    }
+
+    @Test
+    void invalidateIfCurrent_withdrawsMatchingCode() {
+        VerificationCode.Purpose purpose = VerificationCode.Purpose.PHONE_ATTRIBUTE_VERIFICATION;
+        VerificationCodeService.IssuedCode issued = service.issueTracked(
+                "pool", "alice", purpose, Duration.ofHours(24));
+
+        service.invalidateIfCurrent("pool", "alice", purpose, issued);
+
+        VerificationCodeException failure = assertThrows(VerificationCodeException.class,
+                () -> service.consume("pool", "alice", purpose, issued.code()));
+        assertEquals(VerificationCodeException.Kind.NOT_FOUND, failure.getKind());
+    }
+
+    @Test
     void issue_twiceWithin30s_throwsRateLimit() {
         service.issue("pool", "alice",
             VerificationCode.Purpose.SIGNUP_CONFIRMATION, Duration.ofHours(24));

@@ -58,7 +58,7 @@ class CognitoAttributeVerificationConcurrencyTest {
         CountDownLatch releaseFirstIssue = new CountDownLatch(1);
         CountDownLatch secondStarted = new CountDownLatch(1);
 
-        when(codes.issue(anyString(), anyString(), any(), any(Duration.class)))
+        when(codes.issueTracked(anyString(), anyString(), any(), any(Duration.class)))
                 .thenAnswer(invocation -> {
                     int issue = issues.incrementAndGet();
                     if (issue == 1) {
@@ -67,7 +67,7 @@ class CognitoAttributeVerificationConcurrencyTest {
                     }
                     String code = issue == 1 ? FIRST_CODE : SECOND_CODE;
                     latestCode.set(code);
-                    return code;
+                    return new VerificationCodeService.IssuedCode(code, "test-hash-" + issue);
                 });
         doAnswer(invocation -> {
             CognitoUser deliveryUser = invocation.getArgument(1);
@@ -118,7 +118,7 @@ class CognitoAttributeVerificationConcurrencyTest {
         CountDownLatch releaseResendIssue = new CountDownLatch(1);
         CountDownLatch updateStarted = new CountDownLatch(1);
 
-        when(codes.issue(anyString(), anyString(), any(), any(Duration.class)))
+        when(codes.issueTracked(anyString(), anyString(), any(), any(Duration.class)))
                 .thenAnswer(invocation -> {
                     int issue = issues.incrementAndGet();
                     if (issue == 2) {
@@ -127,7 +127,7 @@ class CognitoAttributeVerificationConcurrencyTest {
                     }
                     String code = issue == 1 ? FIRST_CODE : issue == 2 ? SECOND_CODE : "333333";
                     latestCode.set(code);
-                    return code;
+                    return new VerificationCodeService.IssuedCode(code, "test-hash-" + issue);
                 });
         acceptOnlyLatestCode(codes, latestCode);
 
@@ -173,8 +173,12 @@ class CognitoAttributeVerificationConcurrencyTest {
         CountDownLatch releaseConsume = new CountDownLatch(1);
         CountDownLatch updateStarted = new CountDownLatch(1);
 
-        when(codes.issue(anyString(), anyString(), any(), any(Duration.class)))
-                .thenAnswer(invocation -> issues.incrementAndGet() == 1 ? FIRST_CODE : SECOND_CODE);
+        when(codes.issueTracked(anyString(), anyString(), any(), any(Duration.class)))
+                .thenAnswer(invocation -> {
+                    int issue = issues.incrementAndGet();
+                    return new VerificationCodeService.IssuedCode(
+                            issue == 1 ? FIRST_CODE : SECOND_CODE, "test-hash-" + issue);
+                });
         doAnswer(invocation -> {
             assertEquals(FIRST_CODE, invocation.getArgument(3));
             consumeEntered.countDown();
@@ -220,8 +224,8 @@ class CognitoAttributeVerificationConcurrencyTest {
         CountDownLatch releaseConsume = new CountDownLatch(1);
         CountDownLatch adminStarted = new CountDownLatch(1);
 
-        when(codes.issue(anyString(), anyString(), any(), any(Duration.class)))
-                .thenReturn(FIRST_CODE);
+        when(codes.issueTracked(anyString(), anyString(), any(), any(Duration.class)))
+                .thenReturn(new VerificationCodeService.IssuedCode(FIRST_CODE, "test-hash"));
         doAnswer(invocation -> {
             assertEquals(FIRST_CODE, invocation.getArgument(3));
             consumeEntered.countDown();
@@ -269,8 +273,8 @@ class CognitoAttributeVerificationConcurrencyTest {
         CountDownLatch releaseConsume = new CountDownLatch(1);
         CountDownLatch adminStarted = new CountDownLatch(1);
 
-        when(codes.issue(anyString(), anyString(), any(), any(Duration.class)))
-                .thenReturn(FIRST_CODE);
+        when(codes.issueTracked(anyString(), anyString(), any(), any(Duration.class)))
+                .thenReturn(new VerificationCodeService.IssuedCode(FIRST_CODE, "test-hash"));
         doAnswer(invocation -> {
             assertEquals(FIRST_CODE, invocation.getArgument(3));
             consumeEntered.countDown();
@@ -317,8 +321,8 @@ class CognitoAttributeVerificationConcurrencyTest {
         CountDownLatch releaseConsume = new CountDownLatch(1);
         CountDownLatch adminStarted = new CountDownLatch(1);
 
-        when(codes.issue(anyString(), anyString(), any(), any(Duration.class)))
-                .thenReturn(FIRST_CODE);
+        when(codes.issueTracked(anyString(), anyString(), any(), any(Duration.class)))
+                .thenReturn(new VerificationCodeService.IssuedCode(FIRST_CODE, "test-hash"));
         doAnswer(invocation -> {
             assertEquals(FIRST_CODE, invocation.getArgument(3));
             consumeEntered.countDown();
@@ -369,8 +373,8 @@ class CognitoAttributeVerificationConcurrencyTest {
         CountDownLatch releaseConsume = new CountDownLatch(1);
         CountDownLatch changeStarted = new CountDownLatch(1);
 
-        when(codes.issue(anyString(), anyString(), any(), any(Duration.class)))
-                .thenReturn(FIRST_CODE);
+        when(codes.issueTracked(anyString(), anyString(), any(), any(Duration.class)))
+                .thenReturn(new VerificationCodeService.IssuedCode(FIRST_CODE, "test-hash"));
         doAnswer(invocation -> {
             assertEquals(FIRST_CODE, invocation.getArgument(3));
             consumeEntered.countDown();

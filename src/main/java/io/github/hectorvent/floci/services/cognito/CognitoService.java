@@ -63,6 +63,7 @@ import org.jspecify.annotations.Nullable;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
+
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
@@ -2730,9 +2731,13 @@ public class CognitoService implements ResourceProvider {
                     clearPendingAttributeVerification(userPoolId, updatedUser, attributeName);
                 } else if (contact && shouldVerifyAttribute(pool, attributeName)
                         && !isExplicitlyVerified(attributes, attributeName)) {
+                    String pending = updatedUser.getPendingAttributes().get(attributeName);
+                    if (value.equals(pending) || value.equals(updatedUser.getAttributes().get(attributeName))) {
+                        continue;
+                    }
                     clearPendingAttributeVerification(userPoolId, updatedUser, attributeName);
                     ensureVerificationWiring();
-                    String verificationCode = verificationCodeService.issue(
+                    VerificationCodeService.IssuedCode verificationCode = verificationCodeService.issueTracked(
                             userPoolId, updatedUser.getUsername(), verificationPurpose(attributeName),
                             Duration.ofHours(24));
                     dispatchAttributeVerificationCode(pool, null, updatedUser, attributeName, value,
@@ -2763,8 +2768,8 @@ public class CognitoService implements ResourceProvider {
             throw codeDeliveryFailure();
         } finally {
             if (!completed) {
-                messages.forEach(message -> verificationCodeService.invalidatePrevious(
-                        userPoolId, currentUser.getUsername(), message.purpose()));
+                messages.forEach(message -> verificationCodeService.invalidateIfCurrent(
+                        userPoolId, currentUser.getUsername(), message.purpose(), message.issued()));
             }
         }
         updatedUser.setLastModifiedDate(System.currentTimeMillis() / 1000L);
@@ -4181,7 +4186,7 @@ public class CognitoService implements ResourceProvider {
                 : VerificationCode.Purpose.PHONE_ATTRIBUTE_VERIFICATION;
         ensureVerificationWiring();
         try {
-            String code = verificationCodeService.issue(poolId, user.getUsername(),
+            VerificationCodeService.IssuedCode code = verificationCodeService.issueTracked(poolId, user.getUsername(),
                     purpose, Duration.ofHours(24));
             dispatchAttributeVerificationCode(pool, clientId, user, attributeName, destination, purpose, code,
                     "CustomEmailSender_VerifyUserAttribute", clientMetadata, messages);
@@ -4338,7 +4343,7 @@ public class CognitoService implements ResourceProvider {
                 String value = attribute.getValue();
                 VerificationCode.Purpose purpose = verificationPurpose(attributeName);
                 ensureVerificationWiring();
-                String verificationCode = verificationCodeService.issue(
+                VerificationCodeService.IssuedCode verificationCode = verificationCodeService.issueTracked(
                         poolId, currentUser.getUsername(), purpose, Duration.ofHours(24));
                 dispatchAttributeVerificationCode(pool, clientId, currentUser, attributeName, value,
                         purpose, verificationCode, "CustomEmailSender_UpdateUserAttribute", clientMetadata, messages);
@@ -4371,8 +4376,8 @@ public class CognitoService implements ResourceProvider {
         } finally {
             if (!issued) {
                 // A failed sender hand-over must not leave earlier queued codes live but unsent.
-                messages.forEach(message -> verificationCodeService.invalidatePrevious(
-                        poolId, currentUser.getUsername(), message.purpose()));
+                messages.forEach(message -> verificationCodeService.invalidateIfCurrent(
+                        poolId, currentUser.getUsername(), message.purpose(), message.issued()));
             }
         }
 
@@ -6118,20 +6123,22 @@ public class CognitoService implements ResourceProvider {
      */
     private void dispatchAttributeVerificationCode(UserPool pool, String clientId, CognitoUser user,
                                                     String attributeName, String destination,
-                                                    VerificationCode.Purpose purpose, String code,
+                                                    VerificationCode.Purpose purpose,
+                                                    VerificationCodeService.IssuedCode issued,
                                                     String customEmailSenderSource,
                                                     Map<String, String> clientMetadata,
                                                     List<AttributeCodeMessage> messages) {
         CognitoUser deliveryUser = MAPPER.convertValue(user, CognitoUser.class);
         deliveryUser.getAttributes().put(attributeName, destination);
         if (!sendThroughCustomEmailSender(pool, clientId, deliveryUser, deliveryMedium(attributeName),
-                customEmailSenderSource, purpose, code, clientMetadata)) {
-            messages.add(new AttributeCodeMessage(deliveryUser, purpose, code, deliveryMedium(attributeName)));
+                customEmailSenderSource, purpose, issued.code(), clientMetadata)) {
+            messages.add(new AttributeCodeMessage(deliveryUser, purpose, issued, deliveryMedium(attributeName)));
         }
     }
 
     /** An attribute's code, to send as Cognito's own message to the address on {@code deliveryUser}. */
-    private record AttributeCodeMessage(CognitoUser deliveryUser, VerificationCode.Purpose purpose, String code,
+    private record AttributeCodeMessage(CognitoUser deliveryUser, VerificationCode.Purpose purpose,
+                                        VerificationCodeService.IssuedCode issued,
                                         String deliveryMedium) {
     }
 
@@ -6164,13 +6171,14 @@ public class CognitoService implements ResourceProvider {
             try {
                 Map<String, Object> customMessage = authFlowHandler.fireCustomMessage(
                         sending.pool(), sending.client(), sending.user(), triggerSource, clientMetadata);
-                messageDispatcher.dispatch(sending.pool(), message.deliveryUser(), message.purpose(), message.code(),
+                messageDispatcher.dispatch(sending.pool(), message.deliveryUser(), message.purpose(),
+                        message.issued().code(),
                         List.of(message.deliveryMedium()), customMessage);
             } catch (RuntimeException e) {
                 LOG.warnv("Cannot send a {0} code for pool {1}: {2}",
                         message.purpose(), sending.pool().getId(), e.getMessage());
-                verificationCodeService.invalidatePrevious(
-                        sending.pool().getId(), sending.user().getUsername(), message.purpose());
+                verificationCodeService.invalidateIfCurrent(
+                        sending.pool().getId(), sending.user().getUsername(), message.purpose(), message.issued());
                 if (failure == null) {
                     failure = e;
                 }

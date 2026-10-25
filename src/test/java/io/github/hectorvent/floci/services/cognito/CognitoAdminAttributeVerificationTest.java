@@ -38,7 +38,8 @@ class CognitoAdminAttributeVerificationTest {
     void setUp() {
         codes = inlineMock(VerificationCodeService.class);
         dispatcher = inlineMock(CognitoMessageDispatcher.class);
-        when(codes.issue(anyString(), anyString(), any(), any(Duration.class))).thenReturn("123456");
+        when(codes.issueTracked(anyString(), anyString(), any(), any(Duration.class)))
+                .thenReturn(new VerificationCodeService.IssuedCode("123456", "test-hash"));
         service = new CognitoService(
                 new InMemoryStorage<>(), new InMemoryStorage<>(), new InMemoryStorage<>(),
                 new InMemoryStorage<>(), new InMemoryStorage<>(), new InMemoryStorage<>(),
@@ -65,7 +66,7 @@ class CognitoAdminAttributeVerificationTest {
     void changingEmailSendsItsVerificationCode() {
         service.adminUpdateUserAttributes(pool.getId(), "alice", Map.of("email", "new@example.com"));
 
-        verify(codes).issue(eq(pool.getId()), eq("alice"),
+        verify(codes).issueTracked(eq(pool.getId()), eq("alice"),
                 eq(VerificationCode.Purpose.EMAIL_ATTRIBUTE_VERIFICATION), any(Duration.class));
         verify(dispatcher).dispatch(eq(pool), any(), eq(VerificationCode.Purpose.EMAIL_ATTRIBUTE_VERIFICATION),
                 eq("123456"), eq(List.of("EMAIL")), any());
@@ -99,7 +100,7 @@ class CognitoAdminAttributeVerificationTest {
         assertEquals("old@example.com", updated.getAttributes().get("email"));
         assertEquals("true", updated.getAttributes().get("email_verified"));
         assertEquals("new@example.com", updated.getPendingAttributes().get("email"));
-        verify(codes).issue(eq(pendingPool.getId()), eq("bob"),
+        verify(codes).issueTracked(eq(pendingPool.getId()), eq("bob"),
                 eq(VerificationCode.Purpose.EMAIL_ATTRIBUTE_VERIFICATION), any(Duration.class));
         verify(dispatcher).dispatch(eq(pendingPool), any(),
                 eq(VerificationCode.Purpose.EMAIL_ATTRIBUTE_VERIFICATION), eq("123456"),
