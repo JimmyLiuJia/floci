@@ -1,5 +1,7 @@
 package io.github.hectorvent.floci.services.backup;
 
+import io.github.hectorvent.floci.core.common.AwsException;
+import io.github.hectorvent.floci.core.common.RequestScopes;
 import io.quarkus.test.junit.QuarkusTest;
 import io.restassured.path.json.JsonPath;
 import jakarta.inject.Inject;
@@ -11,10 +13,13 @@ import org.junit.jupiter.params.provider.ValueSource;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 @QuarkusTest
 class BackupPaginationIntegrationTest {
@@ -128,6 +133,35 @@ class BackupPaginationIntegrationTest {
         given().header("Authorization", OTHER_REGION_AUTH).queryParam("vaultType", "BACKUP_VAULT")
                 .queryParam("nextToken", token).get("/backup-vaults/").then().statusCode(400)
                 .body("__type", equalTo("InvalidParameterValueException"));
+    }
+
+    @Test
+    void continuationTokenCannotCrossAccounts() {
+        String firstAccount = "111111111111";
+        String secondAccount = "222222222222";
+        String prefix = "account-pages-" + UUID.randomUUID().toString().substring(0, 8);
+        List<String> firstNames = List.of(prefix + "-a", prefix + "-b");
+        List<String> secondNames = List.of(prefix + "-c", prefix + "-d");
+
+        RequestScopes.runAs(firstAccount, REGION, () -> firstNames.forEach(name ->
+                service.createBackupVault(name, null, null, Map.of(), REGION)));
+        RequestScopes.runAs(secondAccount, REGION, () -> secondNames.forEach(name ->
+                service.createBackupVault(name, null, null, Map.of(), REGION)));
+        try {
+            String token = RequestScopes.callAs(firstAccount, REGION, () ->
+                    service.listBackupVaults(REGION, null, 1, null).nextToken());
+            assertNotNull(token);
+
+            AwsException error = assertThrows(AwsException.class, () ->
+                    RequestScopes.callAs(secondAccount, REGION, () ->
+                            service.listBackupVaults(REGION, null, 1, token)));
+            assertEquals("InvalidParameterValueException", error.getErrorCode());
+        } finally {
+            RequestScopes.runAs(firstAccount, REGION, () -> firstNames.forEach(name ->
+                    service.deleteBackupVault(name, REGION)));
+            RequestScopes.runAs(secondAccount, REGION, () -> secondNames.forEach(name ->
+                    service.deleteBackupVault(name, REGION)));
+        }
     }
 
     @Test
