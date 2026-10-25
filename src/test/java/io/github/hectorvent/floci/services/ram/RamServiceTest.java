@@ -72,6 +72,8 @@ class RamServiceTest {
         assertTrue(service.listResources(ACCEPTER, "OTHER-ACCOUNTS", List.of(), "us-east-1").isEmpty());
         assertTrue(service.listPrincipals(ACCEPTER, "OTHER-ACCOUNTS", List.of(), "us-east-1").isEmpty());
         assertTrue(service.listResources(OWNER, "SELF", List.of(), "us-east-1").isEmpty());
+        assertTrue(associations(OWNER, "us-east-1", "RESOURCE", null,
+                List.of(share.getResourceShareArn()), null, null, null, null).items().isEmpty());
 
         // The share itself remains readable with DELETED status.
         List<ResourceShare> own = service.getResourceShares(OWNER, "SELF", "us-east-1");

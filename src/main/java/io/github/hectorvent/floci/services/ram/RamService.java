@@ -331,15 +331,7 @@ public class RamService {
         requireResourceOwner(resourceOwner);
         List<SharedResource> result = new ArrayList<>();
         for (ResourceShare share : sharesIn(region)) {
-            if (!isVisible(share, callerAccountId, resourceOwner)) {
-                continue;
-            }
-            // A deleted share stays readable via GetResourceShares (status DELETED)
-            // but its contents stop being consumable.
-            if ("DELETED".equals(share.getStatus())) {
-                continue;
-            }
-            if (!resourceShareArns.isEmpty() && !resourceShareArns.contains(share.getResourceShareArn())) {
+            if (!isConsumableShare(share, callerAccountId, resourceOwner, resourceShareArns)) {
                 continue;
             }
             for (String resourceArn : share.getResourceArns()) {
@@ -406,15 +398,7 @@ public class RamService {
         requireResourceOwner(resourceOwner);
         List<PrincipalAssociation> result = new ArrayList<>();
         for (ResourceShare share : sharesIn(region)) {
-            if (!isVisible(share, callerAccountId, resourceOwner)) {
-                continue;
-            }
-            // A deleted share stays readable via GetResourceShares (status DELETED)
-            // but its contents stop being consumable.
-            if ("DELETED".equals(share.getStatus())) {
-                continue;
-            }
-            if (!resourceShareArns.isEmpty() && !resourceShareArns.contains(share.getResourceShareArn())) {
+            if (!isConsumableShare(share, callerAccountId, resourceOwner, resourceShareArns)) {
                 continue;
             }
             for (String principal : share.getPrincipals()) {
@@ -456,10 +440,7 @@ public class RamService {
         List<ResourceShareAssociation> associations = new ArrayList<>();
         if (associationStatus == null || "ASSOCIATED".equals(associationStatus)) {
             for (ResourceShare share : sharesIn(region)) {
-                if (!share.getOwningAccountId().equals(callerAccountId)
-                        || "DELETED".equals(share.getStatus())
-                        || (!resourceShareArns.isEmpty()
-                            && !resourceShareArns.contains(share.getResourceShareArn()))) {
+                if (!isConsumableShare(share, callerAccountId, "SELF", resourceShareArns)) {
                     continue;
                 }
                 if ("RESOURCE".equals(associationType)) {
@@ -599,11 +580,7 @@ public class RamService {
      * remember to do it. Returns the stamped share so callers respond with what was stored.
      */
     private ResourceShare putForOwner(ResourceShare share) {
-        Instant now = Instant.now();
-        // A rapid mutation can land in the same clock tick as the preceding write.
-        Instant updated = now.isAfter(share.getLastUpdatedTime())
-                ? now : share.getLastUpdatedTime().plusNanos(1);
-        ResourceShare stamped = share.withLastUpdatedTime(updated);
+        ResourceShare stamped = share.withLastUpdatedTime(Instant.now());
         if (shares instanceof AccountAwareStorageBackend<ResourceShare> accountAware) {
             accountAware.putForAccount(
                     stamped.getOwningAccountId(), stamped.getResourceShareArn(), stamped);
@@ -668,6 +645,14 @@ public class RamService {
         }
         return share.getPrincipals().stream()
                 .anyMatch(principal -> isVisibleToPrincipal(share, principal, callerAccountId));
+    }
+
+    private boolean isConsumableShare(ResourceShare share, String callerAccountId,
+                                      String resourceOwner, List<String> resourceShareArns) {
+        // Deleted shares remain readable through GetResourceShares, but not these contents.
+        return isVisible(share, callerAccountId, resourceOwner)
+                && !"DELETED".equals(share.getStatus())
+                && (resourceShareArns.isEmpty() || resourceShareArns.contains(share.getResourceShareArn()));
     }
 
     private boolean isVisibleToPrincipal(ResourceShare share, String principal, String callerAccountId) {
