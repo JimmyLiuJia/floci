@@ -4,6 +4,8 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import io.github.hectorvent.floci.core.common.AwsArnUtils;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.AwsPartitions;
+import io.github.hectorvent.floci.core.common.PaginatedResult;
+import io.github.hectorvent.floci.core.common.Pagination;
 import io.github.hectorvent.floci.core.storage.AccountAwareStorageBackend;
 import io.github.hectorvent.floci.core.storage.StorageBackend;
 import io.github.hectorvent.floci.core.storage.StorageFactory;
@@ -11,6 +13,7 @@ import io.github.hectorvent.floci.services.organizations.OrganizationsService;
 import io.github.hectorvent.floci.services.organizations.model.Organization;
 import io.github.hectorvent.floci.services.ram.model.PrincipalAssociation;
 import io.github.hectorvent.floci.services.ram.model.ResourceShare;
+import io.github.hectorvent.floci.services.ram.model.ResourceShareAssociation;
 import io.github.hectorvent.floci.services.ram.model.ResourceShareInvitation;
 import io.github.hectorvent.floci.services.ram.model.SharePermission;
 import io.github.hectorvent.floci.services.ram.model.SharedResource;
@@ -54,6 +57,9 @@ public class RamService {
     /** The modeled ResourceShareStatus enum. */
     private static final List<String> SHARE_STATUSES =
             List.of("PENDING", "ACTIVE", "FAILED", "DELETING", "DELETED");
+    private static final List<String> ASSOCIATION_TYPES = List.of("PRINCIPAL", "RESOURCE", "SOURCE");
+    private static final List<String> ASSOCIATION_STATUSES = List.of("ASSOCIATING", "ASSOCIATED", "FAILED",
+            "DISASSOCIATING", "DISASSOCIATED", "SUSPENDED", "SUSPENDING", "RESTORING");
     /** The owner segment of an AWS managed permission ARN. */
     private static final String MANAGED_PERMISSION_OWNER = "aws";
     /**
@@ -419,6 +425,73 @@ public class RamService {
         return result;
     }
 
+    public PaginatedResult<ResourceShareAssociation> getResourceShareAssociations(
+            String callerAccountId, String region, String associationType, String associationStatus,
+            List<String> resourceShareArns, String resourceArn, String principal,
+            Integer maxResults, String nextToken) {
+        if (associationType == null || !ASSOCIATION_TYPES.contains(associationType)) {
+            throw new AwsException("InvalidParameterException", "associationType must be one of "
+                    + ASSOCIATION_TYPES + ".", 400);
+        }
+        if (associationStatus != null && !ASSOCIATION_STATUSES.contains(associationStatus)) {
+            throw new AwsException("InvalidParameterException", "associationStatus must be one of "
+                    + ASSOCIATION_STATUSES + ".", 400);
+        }
+        if (("RESOURCE".equals(associationType) && principal != null)
+                || ("PRINCIPAL".equals(associationType) && resourceArn != null)) {
+            throw new AwsException("InvalidParameterException",
+                    "The entity filter is not valid for this associationType.", 400);
+        }
+        requireValidArns(resourceShareArns);
+        if (resourceArn != null && !isValidArn(resourceArn)) {
+            throw new AwsException("MalformedArnException", "Invalid resourceArn: " + resourceArn, 400);
+        }
+        if (maxResults != null && (maxResults < 1 || maxResults > 500)) {
+            throw new AwsException("InvalidParameterException", "maxResults must be between 1 and 500.", 400);
+        }
+        if (nextToken != null && nextToken.isEmpty()) {
+            throw new AwsException("InvalidNextTokenException", "Invalid nextToken.", 400);
+        }
+
+        List<ResourceShareAssociation> associations = new ArrayList<>();
+        if (associationStatus == null || "ASSOCIATED".equals(associationStatus)) {
+            for (ResourceShare share : sharesIn(region)) {
+                if (!share.getOwningAccountId().equals(callerAccountId)
+                        || "DELETED".equals(share.getStatus())
+                        || (!resourceShareArns.isEmpty()
+                            && !resourceShareArns.contains(share.getResourceShareArn()))) {
+                    continue;
+                }
+                if ("RESOURCE".equals(associationType)) {
+                    for (String entity : new LinkedHashSet<>(share.getResourceArns())) {
+                        if (resourceArn == null || resourceArn.equals(entity)) {
+                            associations.add(association(share, entity, "RESOURCE"));
+                        }
+                    }
+                } else if ("PRINCIPAL".equals(associationType)) {
+                    for (String entity : new LinkedHashSet<>(share.getPrincipals())) {
+                        if (principal == null || principal.equals(entity)) {
+                            associations.add(association(share, entity, "PRINCIPAL"));
+                        }
+                    }
+                }
+            }
+        }
+
+        String namespace = "ram-associations|" + callerAccountId + "|" + region + "|" + associationType
+                + "|" + associationStatus + "|" + resourceShareArns.stream().sorted().toList()
+                + "|" + resourceArn + "|" + principal;
+        return Pagination.paginate(associations,
+                association -> association.resourceShareArn() + "\u0000" + association.associatedEntity(),
+                maxResults != null ? maxResults : 100, nextToken, namespace,
+                ignored -> new AwsException("InvalidNextTokenException", "Invalid nextToken.", 400));
+    }
+
+    private static ResourceShareAssociation association(ResourceShare share, String entity, String type) {
+        return new ResourceShareAssociation(share.getResourceShareArn(), share.getName(), entity, type,
+                share.getCreationTime(), share.getLastUpdatedTime());
+    }
+
     /**
      * Floci has no explicit permission model: every resource type in a share is governed by RAM's
      * default AWS managed permission for that type, so one summary is returned per distinct type.
@@ -526,7 +599,11 @@ public class RamService {
      * remember to do it. Returns the stamped share so callers respond with what was stored.
      */
     private ResourceShare putForOwner(ResourceShare share) {
-        ResourceShare stamped = share.withLastUpdatedTime(Instant.now());
+        Instant now = Instant.now();
+        // A rapid mutation can land in the same clock tick as the preceding write.
+        Instant updated = now.isAfter(share.getLastUpdatedTime())
+                ? now : share.getLastUpdatedTime().plusNanos(1);
+        ResourceShare stamped = share.withLastUpdatedTime(updated);
         if (shares instanceof AccountAwareStorageBackend<ResourceShare> accountAware) {
             accountAware.putForAccount(
                     stamped.getOwningAccountId(), stamped.getResourceShareArn(), stamped);
