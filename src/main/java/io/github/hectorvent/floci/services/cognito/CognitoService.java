@@ -63,7 +63,6 @@ import org.jspecify.annotations.Nullable;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
-
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
@@ -2719,70 +2718,44 @@ public class CognitoService implements ResourceProvider {
                 }
             }
         }
-        boolean completed = false;
-        try {
-            for (Map.Entry<String, String> attribute : attributes.entrySet()) {
-                String attributeName = attribute.getKey();
-                String value = attribute.getValue();
-                boolean contact = isVerifiableContactAttribute(attributeName);
-                if (blankToNull(value) == null) {
-                    updatedUser.getAttributes().remove(attributeName);
-                    updatedUser.getAttributes().remove(attributeName + "_verified");
-                    clearPendingAttributeVerification(userPoolId, updatedUser, attributeName);
-                } else if (contact && shouldVerifyAttribute(pool, attributeName)
-                        && !isExplicitlyVerified(attributes, attributeName)) {
-                    String pending = updatedUser.getPendingAttributes().get(attributeName);
-                    boolean sameCurrent = value.equals(updatedUser.getAttributes().get(attributeName));
-                    if (sameCurrent && "true".equalsIgnoreCase(
-                            updatedUser.getAttributes().get(attributeName + "_verified"))) {
+        Map<String, String> contacts = new LinkedHashMap<>();
+        for (Map.Entry<String, String> attribute : attributes.entrySet()) {
+            String attributeName = attribute.getKey();
+            String value = attribute.getValue();
+            boolean contact = isVerifiableContactAttribute(attributeName);
+            if (blankToNull(value) == null) {
+                updatedUser.getAttributes().remove(attributeName);
+                updatedUser.getAttributes().remove(attributeName + "_verified");
+                clearPendingAttributeVerification(userPoolId, updatedUser, attributeName);
+            } else if (contact && shouldVerifyAttribute(pool, attributeName)
+                    && !isExplicitlyVerified(attributes, attributeName)) {
+                String pending = updatedUser.getPendingAttributes().get(attributeName);
+                boolean sameCurrent = value.equals(updatedUser.getAttributes().get(attributeName));
+                if (sameCurrent && "true".equalsIgnoreCase(
+                        updatedUser.getAttributes().get(attributeName + "_verified"))) {
+                    continue;
+                }
+                if (value.equals(pending) || sameCurrent) {
+                    ensureVerificationWiring();
+                    if (verificationCodeService.hasUsableCode(
+                            userPoolId, updatedUser.getUsername(), verificationPurpose(attributeName))) {
                         continue;
                     }
-                    if (value.equals(pending) || sameCurrent) {
-                        ensureVerificationWiring();
-                        if (verificationCodeService.hasUsableCode(
-                                userPoolId, updatedUser.getUsername(), verificationPurpose(attributeName))) {
-                            continue;
-                        }
-                    }
-                    clearPendingAttributeVerification(userPoolId, updatedUser, attributeName);
-                    ensureVerificationWiring();
-                    VerificationCodeService.IssuedCode verificationCode = verificationCodeService.issueTracked(
-                            userPoolId, updatedUser.getUsername(), verificationPurpose(attributeName),
-                            Duration.ofHours(24));
-                    dispatchAttributeVerificationCode(pool, null, updatedUser, attributeName, value,
-                            verificationPurpose(attributeName), verificationCode,
-                            "CustomEmailSender_AdminUpdateUserAttribute", clientMetadata, messages);
-                    if (requiresVerificationBeforeUpdate(pool, attributeName)) {
-                        updatedUser.getPendingAttributes().put(attributeName, value);
-                    } else {
-                        updatedUser.getAttributes().put(attributeName, value);
-                        updatedUser.getAttributes().put(attributeName + "_verified", "false");
-                        updatedUser.getPendingAttributes().remove(attributeName);
-                    }
-                } else {
-                    clearPendingAttributeVerification(userPoolId, updatedUser, attributeName);
-                    updatedUser.getAttributes().put(attributeName, value);
-                    if (contact && isExplicitlyVerified(attributes, attributeName)) {
-                        updatedUser.getAttributes().put(attributeName + "_verified", "true");
-                        updatedUser.getPendingAttributes().remove(attributeName);
-                    }
+                }
+                clearPendingAttributeVerification(userPoolId, updatedUser, attributeName);
+                stageContactAttributeUpdate(pool, updatedUser, attributeName, value);
+                contacts.put(attributeName, value);
+            } else {
+                clearPendingAttributeVerification(userPoolId, updatedUser, attributeName);
+                updatedUser.getAttributes().put(attributeName, value);
+                if (contact && isExplicitlyVerified(attributes, attributeName)) {
+                    updatedUser.getAttributes().put(attributeName + "_verified", "true");
+                    updatedUser.getPendingAttributes().remove(attributeName);
                 }
             }
-            completed = true;
-        } catch (VerificationCodeException e) {
-            throw mapVerificationCodeException(e);
-        } catch (AwsException e) {
-            throw e;
-        } catch (RuntimeException e) {
-            throw codeDeliveryFailure();
-        } finally {
-            if (!completed) {
-                messages.forEach(message -> verificationCodeService.invalidateIfCurrent(
-                        userPoolId, currentUser.getUsername(), message.purpose(), message.issued()));
-            }
         }
-        updatedUser.setLastModifiedDate(System.currentTimeMillis() / 1000L);
-        userStore.put(userKey(userPoolId, updatedUser.getUsername()), updatedUser);
+        completeContactAttributeUpdate(pool, null, currentUser, updatedUser, contacts,
+                "CustomEmailSender_AdminUpdateUserAttribute", clientMetadata, messages);
     }
 
     private boolean isExplicitlyVerified(Map<String, String> attributes, String attributeName) {
@@ -4321,9 +4294,7 @@ public class CognitoService implements ResourceProvider {
         }
 
         CognitoUser updatedUser = MAPPER.convertValue(currentUser, CognitoUser.class);
-        List<Map<String, Object>> deliveryDetails = new ArrayList<>();
         Map<String, String> contacts = new LinkedHashMap<>();
-
         for (Map.Entry<String, String> attribute : attributes.entrySet()) {
             String attributeName = attribute.getKey();
             String value = attribute.getValue();
@@ -4334,17 +4305,30 @@ public class CognitoService implements ResourceProvider {
             } else if (!isVerifiableContactAttribute(attributeName)) {
                 updatedUser.getAttributes().put(attributeName, value);
             } else {
+                stageContactAttributeUpdate(pool, updatedUser, attributeName, value);
                 contacts.put(attributeName, value);
-                if (requiresVerificationBeforeUpdate(pool, attributeName)) {
-                    updatedUser.getPendingAttributes().put(attributeName, value);
-                } else {
-                    updatedUser.getAttributes().put(attributeName, value);
-                    updatedUser.getAttributes().put(attributeName + "_verified", "false");
-                    updatedUser.getPendingAttributes().remove(attributeName);
-                }
             }
         }
+        return completeContactAttributeUpdate(pool, clientId, currentUser, updatedUser, contacts,
+                "CustomEmailSender_UpdateUserAttribute", clientMetadata, messages);
+    }
 
+    private void stageContactAttributeUpdate(UserPool pool, CognitoUser user, String attributeName, String value) {
+        if (requiresVerificationBeforeUpdate(pool, attributeName)) {
+            user.getPendingAttributes().put(attributeName, value);
+        } else {
+            user.getAttributes().put(attributeName, value);
+            user.getAttributes().put(attributeName + "_verified", "false");
+            user.getPendingAttributes().remove(attributeName);
+        }
+    }
+
+    private List<Map<String, Object>> completeContactAttributeUpdate(
+            UserPool pool, String clientId, CognitoUser currentUser, CognitoUser updatedUser,
+            Map<String, String> contacts, String customEmailSenderSource,
+            Map<String, String> clientMetadata, List<AttributeCodeMessage> messages) {
+        String poolId = pool.getId();
+        List<Map<String, Object>> deliveryDetails = new ArrayList<>();
         boolean issued = false;
         try {
             for (Map.Entry<String, String> attribute : contacts.entrySet()) {
@@ -4355,7 +4339,7 @@ public class CognitoService implements ResourceProvider {
                 VerificationCodeService.IssuedCode verificationCode = verificationCodeService.issueTracked(
                         poolId, currentUser.getUsername(), purpose, Duration.ofHours(24));
                 dispatchAttributeVerificationCode(pool, clientId, currentUser, attributeName, value,
-                        purpose, verificationCode, "CustomEmailSender_UpdateUserAttribute", clientMetadata, messages);
+                        purpose, verificationCode, customEmailSenderSource, clientMetadata, messages);
 
                 Map<String, Object> detail = new LinkedHashMap<>();
                 detail.put("AttributeName", attributeName);
@@ -4367,10 +4351,9 @@ public class CognitoService implements ResourceProvider {
         } catch (VerificationCodeException e) {
             throw mapVerificationCodeException(e);
         } catch (CustomEmailSenderException e) {
-            for (String attributeName : attributes.keySet()) {
-                if (isVerifiableContactAttribute(attributeName)
-                        && !Objects.equals(attributeVerificationDestination(currentUser, attributeName),
-                                attributeVerificationDestination(updatedUser, attributeName))) {
+            for (String attributeName : List.of("email", "phone_number")) {
+                if (!Objects.equals(attributeVerificationDestination(currentUser, attributeName),
+                        attributeVerificationDestination(updatedUser, attributeName))) {
                     verificationCodeService.invalidatePrevious(
                             poolId, currentUser.getUsername(), verificationPurpose(attributeName));
                 }
