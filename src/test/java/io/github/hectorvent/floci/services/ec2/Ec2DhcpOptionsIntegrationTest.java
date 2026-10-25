@@ -494,12 +494,4 @@ class Ec2DhcpOptionsIntegrationTest {
             .header("Authorization", AUTH_HEADER)
         .when().post("/").then().statusCode(200);
     }
-
-    private void deleteVpc(String id) {
-        given()
-            .formParam("Action", "DeleteVpc")
-            .formParam("VpcId", id)
-            .header("Authorization", AUTH_HEADER)
-        .when().post("/").then().statusCode(200);
-    }
 }

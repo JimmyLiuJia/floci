@@ -83,7 +83,7 @@ class Ec2ServicePersistenceTest {
     }
 
     @Test
-    void startupRestoresDeletedDefaultDhcpOptions(@TempDir Path dir) {
+    void createVpcRestoresDeletedDefaultDhcpOptionsAfterRestart(@TempDir Path dir) {
         Ec2Service original = newService(dir);
         original.ensureDefaultResources(REGION);
         String defaultVpcId = original.describeVpcs(REGION, List.of(), List.of()).stream()
@@ -93,11 +93,13 @@ class Ec2ServicePersistenceTest {
 
         Ec2Service restarted = newService(dir);
         restarted.ensureDefaultResources(REGION);
+        assertTrue(restarted.describeDhcpOptions(REGION, List.of(), List.of(), 0, null)
+                .items().isEmpty());
+        assertEquals("dopt-default", restarted.createVpc(REGION, "10.78.0.0/16", false).getDhcpOptionsId());
         DhcpOptions restored = restarted.describeDhcpOptions(REGION, List.of("dopt-default"), List.of(), 0, null)
                 .items().getFirst();
         assertEquals("dopt-default", restored.getDhcpOptionsId());
         assertEquals("default", restarted.requireVpc(REGION, defaultVpcId).getDhcpOptionsId());
-        assertEquals("dopt-default", restarted.createVpc(REGION, "10.78.0.0/16", false).getDhcpOptionsId());
     }
 
     @Test

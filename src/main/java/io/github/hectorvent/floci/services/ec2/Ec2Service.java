@@ -1391,31 +1391,33 @@ public class Ec2Service implements ContainerTeardown, ResourceProvider, Resettab
         }
     }
 
+    private void ensureDefaultDhcpOptions(String region, String ownerAccountId) {
+        String defaultOptionsId = "dopt-default";
+        if (dhcpOptions.get(key(region, defaultOptionsId)).isEmpty()) {
+            DhcpOptions defaultOptions = new DhcpOptions();
+            defaultOptions.setDhcpOptionsId(defaultOptionsId);
+            defaultOptions.setRegion(region);
+            defaultOptions.setOwnerId(ownerAccountId);
+            defaultOptions.setConfigurations(List.of(
+                    new DhcpConfiguration("domain-name", List.of(AwsRegions.ec2PrivateDnsDomain(region))),
+                    new DhcpConfiguration("domain-name-servers", List.of("AmazonProvidedDNS")),
+                    new DhcpConfiguration("ipv6-address-preferred-lease-time", List.of("140"))));
+            dhcpOptions.put(key(region, defaultOptionsId), defaultOptions);
+        }
+    }
+
     public void ensureDefaultResources(String region) {
         String ownerAccountId = callerAccountId();
         String seedScope = ownerAccountId + "::" + region;
-        String defaultOptionsId = "dopt-default";
-        synchronized (lockFor(seedScope)) {
-            if (dhcpOptions.get(key(region, defaultOptionsId)).isEmpty()) {
-                DhcpOptions defaultOptions = new DhcpOptions();
-                defaultOptions.setDhcpOptionsId(defaultOptionsId);
-                defaultOptions.setRegion(region);
-                defaultOptions.setOwnerId(ownerAccountId);
-                defaultOptions.setConfigurations(List.of(
-                        new DhcpConfiguration("domain-name", List.of(AwsRegions.ec2PrivateDnsDomain(region))),
-                        new DhcpConfiguration("domain-name-servers", List.of("AmazonProvidedDNS")),
-                        new DhcpConfiguration("ipv6-address-preferred-lease-time", List.of("140"))));
-                dhcpOptions.put(key(region, defaultOptionsId), defaultOptions);
-            }
-            if (!seededAccountRegions.add(seedScope)) {
-                return;
-            }
+        if (!seededAccountRegions.add(seedScope)) {
+            return;
         }
         // Already provisioned in a previous run and reloaded from persistent storage: the default
         // VPC (and everything else) is present, so don't re-seed and create duplicates (#1297).
         if (!vpcs.scan(k -> k.startsWith(region + "::")).isEmpty()) {
             return;
         }
+        ensureDefaultDhcpOptions(region, ownerAccountId);
         LOG.debugv("Seeding default EC2 resources for region {0}", region);
 
         // Default VPC
@@ -6068,6 +6070,7 @@ public class Ec2Service implements ContainerTeardown, ResourceProvider, Resettab
         rejectOutOfRangePrefix(cidrBlock, "InvalidVpc.Range");
         rejectReservedVpcRange(cidrBlock);
         ensureDefaultResources(region);
+        ensureDefaultDhcpOptions(region, callerAccountId());
         String vpcId = "vpc-" + randomHex(8);
         Vpc vpc = new Vpc();
         vpc.setVpcId(vpcId);
