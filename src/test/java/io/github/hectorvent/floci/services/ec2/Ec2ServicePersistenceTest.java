@@ -83,6 +83,26 @@ class Ec2ServicePersistenceTest {
     }
 
     @Test
+    void startupRestoresDefaultDhcpOptionsReferencedByLegacyVpc(@TempDir Path dir) throws IOException {
+        Files.writeString(dir.resolve("ec2-vpcs.json"), """
+                {
+                  "us-east-1::vpc-legacy": {
+                    "vpcId": "vpc-legacy",
+                    "region": "us-east-1",
+                    "ownerId": "000000000000",
+                    "dhcpOptionsId": "dopt-default"
+                  }
+                }
+                """);
+
+        Ec2Service restarted = newService(dir);
+
+        DhcpOptions restored = restarted.describeDhcpOptions(REGION, List.of("dopt-default"), List.of(), 0, null)
+                .items().getFirst();
+        assertEquals("dopt-default", restored.getDhcpOptionsId());
+    }
+
+    @Test
     void createVpcRestoresDeletedDefaultDhcpOptionsAfterRestart(@TempDir Path dir) {
         Ec2Service original = newService(dir);
         original.ensureDefaultResources(REGION);

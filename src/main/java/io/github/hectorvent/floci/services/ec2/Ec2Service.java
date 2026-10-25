@@ -1412,9 +1412,13 @@ public class Ec2Service implements ContainerTeardown, ResourceProvider, Resettab
         if (!seededAccountRegions.add(seedScope)) {
             return;
         }
+        List<Vpc> existingVpcs = vpcs.scan(k -> k.startsWith(region + "::"));
         // Already provisioned in a previous run and reloaded from persistent storage: the default
         // VPC (and everything else) is present, so don't re-seed and create duplicates (#1297).
-        if (!vpcs.scan(k -> k.startsWith(region + "::")).isEmpty()) {
+        if (!existingVpcs.isEmpty()) {
+            if (existingVpcs.stream().anyMatch(vpc -> "dopt-default".equals(vpc.getDhcpOptionsId()))) {
+                ensureDefaultDhcpOptions(region, ownerAccountId);
+            }
             return;
         }
         ensureDefaultDhcpOptions(region, ownerAccountId);
