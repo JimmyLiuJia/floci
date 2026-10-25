@@ -437,6 +437,94 @@ public class CodeBuildService {
         return new ArrayList<>(reportGroupsFor(region).keySet());
     }
 
+    public ReportGroupPage listReportGroupsPage(String region, String sortBy, String sortOrder,
+                                                int maxResults, String nextToken) {
+        if (maxResults < 1 || maxResults > 100) {
+            throw new AwsException("InvalidInputException", "maxResults must be between 1 and 100", 400);
+        }
+        String criterion = sortBy == null ? "NAME" : sortBy;
+        String order = sortOrder == null ? "ASCENDING" : sortOrder;
+        Comparator<ReportGroup> comparator = reportGroupComparator(criterion, order);
+        List<ReportGroup> groups = reportGroupsFor(region).values().stream().sorted(comparator).toList();
+        int start = 0;
+        if (nextToken != null) {
+            ReportGroup anchor = decodeListReportGroupsToken(nextToken, region, criterion, order);
+            while (start < groups.size() && comparator.compare(groups.get(start), anchor) <= 0) {
+                start++;
+            }
+        }
+        int end = Math.min(start + maxResults, groups.size());
+        List<String> arns = groups.subList(start, end).stream().map(ReportGroup::getArn).toList();
+        String token = end < groups.size()
+                ? encodeListReportGroupsToken(groups.get(end - 1), region, criterion, order) : null;
+        return new ReportGroupPage(arns, token);
+    }
+
+    private Comparator<ReportGroup> reportGroupComparator(String sortBy, String sortOrder) {
+        Comparator<ReportGroup> comparator = switch (sortBy) {
+            case "NAME" -> Comparator.comparing(ReportGroup::getName);
+            case "CREATED_TIME" -> Comparator.comparing(ReportGroup::getCreated,
+                    Comparator.nullsFirst(Comparator.naturalOrder()));
+            case "LAST_MODIFIED_TIME" -> Comparator.comparing(ReportGroup::getLastModified,
+                    Comparator.nullsFirst(Comparator.naturalOrder()));
+            default -> throw new AwsException("InvalidInputException", "Invalid sortBy: " + sortBy, 400);
+        };
+        if (isDescendingSortOrder(sortOrder, false)) {
+            comparator = comparator.reversed();
+        }
+        return comparator.thenComparing(ReportGroup::getName).thenComparing(ReportGroup::getArn);
+    }
+
+    private ReportGroup decodeListReportGroupsToken(String token, String region, String sortBy, String sortOrder) {
+        JsonNode cursor;
+        try {
+            cursor = PAGE_TOKEN_MAPPER.readTree(Base64.getUrlDecoder().decode(token));
+        } catch (IllegalArgumentException | IOException e) {
+            throw new AwsException("InvalidInputException", "Invalid nextToken", 400);
+        }
+        if (cursor == null || !"ListReportGroups".equals(cursor.path("action").asText(null))
+                || !region.equals(cursor.path("region").asText(null))
+                || !sortBy.equals(cursor.path("sortBy").asText(null))
+                || !sortOrder.equals(cursor.path("sortOrder").asText(null))
+                || !cursor.path("lastArn").isTextual() || cursor.path("lastArn").asText().isEmpty()
+                || !cursor.path("lastName").isTextual() || cursor.path("lastName").asText().isEmpty()
+                || !cursor.has("sortValue")
+                || "NAME".equals(sortBy) && !cursor.path("sortValue").isNull()
+                || !cursor.path("sortValue").isNull() && !cursor.path("sortValue").isNumber()) {
+            throw new AwsException("InvalidInputException", "Invalid nextToken", 400);
+        }
+        Double value = cursor.path("sortValue").isNull() ? null : cursor.path("sortValue").asDouble();
+        if (value != null && !Double.isFinite(value)) {
+            throw new AwsException("InvalidInputException", "Invalid nextToken", 400);
+        }
+        ReportGroup anchor = new ReportGroup();
+        anchor.setArn(cursor.path("lastArn").asText());
+        anchor.setName(cursor.path("lastName").asText());
+        anchor.setCreated(value);
+        anchor.setLastModified(value);
+        return anchor;
+    }
+
+    private String encodeListReportGroupsToken(ReportGroup last, String region, String sortBy, String sortOrder) {
+        Double value = switch (sortBy) {
+            case "CREATED_TIME" -> last.getCreated();
+            case "LAST_MODIFIED_TIME" -> last.getLastModified();
+            default -> null;
+        };
+        ObjectNode cursor = PAGE_TOKEN_MAPPER.createObjectNode();
+        cursor.put("action", "ListReportGroups");
+        cursor.put("region", region);
+        cursor.put("sortBy", sortBy);
+        cursor.put("sortOrder", sortOrder);
+        cursor.put("lastArn", last.getArn());
+        cursor.put("lastName", last.getName());
+        cursor.put("sortValue", value);
+        return Base64Url.encode(cursor.toString());
+    }
+
+    public record ReportGroupPage(List<String> reportGroups, String nextToken) {
+    }
+
     // ---- Source Credentials ----
 
     public SourceCredential importSourceCredentials(String region, String account,
