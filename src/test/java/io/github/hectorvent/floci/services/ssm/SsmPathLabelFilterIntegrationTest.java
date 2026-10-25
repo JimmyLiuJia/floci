@@ -112,6 +112,31 @@ class SsmPathLabelFilterIntegrationTest {
     }
 
     @Test
+    void usesTheLabeledVersionsTypeWhenCombiningFilters() {
+        put("config", "old-text");
+        label("config", 1, "release");
+        put(ACCOUNT, REGION, "config", "new-secret", "SecureString", "alias/release-key");
+
+        JsonPath oldType = query(false, List.of(filter("Label", "release"), filter("Type", "String")));
+        assertEquals(List.of("old-text"), oldType.getList("Parameters.Value", String.class));
+        assertEquals(List.of("String"), oldType.getList("Parameters.Type", String.class));
+        assertNames(query(false, List.of(filter("Label", "release"), filter("Type", "SecureString"))));
+        assertNames(query(false, List.of(filter("Type", "SecureString"))), "config");
+    }
+
+    @Test
+    void usesTheLabeledVersionsKeyIdWhenCombiningFilters() {
+        put(ACCOUNT, REGION, "config", "old-secret", "SecureString", "alias/old-key");
+        label("config", 1, "release");
+        put(ACCOUNT, REGION, "config", "new-secret", "SecureString", "alias/new-key");
+
+        JsonPath oldKey = query(false, List.of(filter("Label", "release"), filter("KeyId", "alias/old-key")));
+        assertEquals(List.of("old-secret"), oldKey.getList("Parameters.Value", String.class));
+        assertNames(query(false, List.of(filter("Label", "release"), filter("KeyId", "alias/new-key"))));
+        assertNames(query(false, List.of(filter("KeyId", "alias/new-key"))), "config");
+    }
+
+    @Test
     void pagesDifferentLabeledVersionsOfTheSameParameter() {
         for (int version = 1; version <= 10; version++) {
             put("config", "value-" + version);

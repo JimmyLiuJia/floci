@@ -36,8 +36,8 @@ not allowed for this action are rejected with `InvalidFilterKey`.
 `Label` filters accept only `Equals` and return the stored versions carrying the requested
 labels, including older versions. Moving or removing a label changes subsequent results.
 The same OR/AND rules apply to label filters, and a version matching several requested
-labels appears only once. Type and KeyId filters still select parameter metadata before
-label matching. Public AMI parameters have no stored labels and are excluded from label queries.
+labels appears only once. Type and KeyId filters match the labeled version's metadata.
+Public AMI parameters have no stored labels and are excluded from label queries.
 `MaxResults` and `NextToken` paginate the matching versions in name/version order; queries
 without a label filter continue to return the latest version of each parameter.
 
