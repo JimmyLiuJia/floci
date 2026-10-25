@@ -9,10 +9,13 @@ import io.github.hectorvent.floci.core.storage.AccountAwareStorageBackend;
 import io.github.hectorvent.floci.core.storage.InMemoryStorage;
 import io.github.hectorvent.floci.core.storage.StorageFactory;
 import io.github.hectorvent.floci.services.acm.AcmService;
+import io.github.hectorvent.floci.services.cognito.model.CognitoUser;
 import io.github.hectorvent.floci.services.cognito.model.UserPool;
 import io.github.hectorvent.floci.services.cognito.model.UserPoolClient;
 import io.github.hectorvent.floci.services.cognito.verification.CognitoMessageDispatcher;
 import io.github.hectorvent.floci.services.cognito.verification.CustomSenderCodeEncryptor;
+import io.github.hectorvent.floci.services.cognito.verification.VerificationCode;
+import io.github.hectorvent.floci.services.cognito.verification.VerificationCodeException;
 import io.github.hectorvent.floci.services.cognito.verification.VerificationCodeService;
 import io.github.hectorvent.floci.services.kms.KmsService;
 import io.github.hectorvent.floci.services.lambda.LambdaService;
@@ -86,6 +89,7 @@ class CognitoCustomEmailSenderTest {
     private SesService ses;
     private SnsService sns;
     private CognitoService service;
+    private VerificationCodeService codes;
 
     @BeforeEach
     void setUp() {
@@ -96,14 +100,41 @@ class CognitoCustomEmailSenderTest {
         lambda = mock(LambdaService.class);
         ses = mock(SesService.class);
         sns = mock(SnsService.class);
+        codes = new VerificationCodeService(storageFactory, Clock.systemUTC());
         service = new CognitoService(
                 new InMemoryStorage<>(), new InMemoryStorage<>(), new InMemoryStorage<>(),
                 new InMemoryStorage<>(), new InMemoryStorage<>(),
                 new InMemoryStorage<>(), new InMemoryStorage<>(), new InMemoryStorage<>(),
                 "http://localhost:4566", "cloudfront.net", regionResolver, lambda, mock(AcmService.class),
-                new VerificationCodeService(storageFactory, Clock.systemUTC()),
+                codes,
                 new CognitoMessageDispatcher(ses, sns, REGION), mock(TlsCertificateManager.class),
                 Clock.systemUTC(), true, new CustomSenderCodeEncryptor(kms));
+    }
+
+    @Test
+    void failedAdminContactUpdateLeavesContactsAndQueuedCodesUnchanged() {
+        UserPool pool = pool(Map.of("KMSKeyID", keyArn, "CustomEmailSender", sender()),
+                List.of("email", "phone_number"));
+        service.adminCreateUser(pool.getId(), "alice", Map.of(
+                "email", "old@example.com", "phone_number", "+12025550100"), null);
+        service.adminSetUserPassword(pool.getId(), "alice", "Passw0rd!", true);
+        kms.disableKey(keyArn, REGION);
+
+        Map<String, String> attributes = new LinkedHashMap<>();
+        attributes.put("phone_number", "+12025550101");
+        attributes.put("email", "new@example.com");
+
+        assertThrows(AwsException.class,
+                () -> service.adminUpdateUserAttributes(pool.getId(), "alice", attributes));
+
+        CognitoUser unchanged = service.adminGetUser(pool.getId(), "alice");
+        assertEquals("old@example.com", unchanged.getAttributes().get("email"));
+        assertEquals("+12025550100", unchanged.getAttributes().get("phone_number"));
+        assertTrue(unchanged.getPendingAttributes().isEmpty());
+        VerificationCodeException withdrawn = assertThrows(VerificationCodeException.class,
+                () -> codes.consume(pool.getId(), "alice",
+                        VerificationCode.Purpose.PHONE_ATTRIBUTE_VERIFICATION, "000000"));
+        assertEquals(VerificationCodeException.Kind.NOT_FOUND, withdrawn.getKind());
     }
 
     @Test
