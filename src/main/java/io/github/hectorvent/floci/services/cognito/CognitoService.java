@@ -2697,14 +2697,9 @@ public class CognitoService implements ResourceProvider {
             Map<String, String> clientMetadata, List<AttributeCodeMessage> messages) {
         CognitoUser currentUser = adminGetUser(userPoolId, username);
         UserPool pool = describeUserPool(userPoolId);
-        // A CustomMessage callback can call this operation on the same user. Do not recursively
-        // invoke that Lambda while its callback is still running; the contact remains unverified.
-        boolean customMessageInvocationActive = authFlowHandler.customMessageInvocationActive(
-                userPoolId, currentUser.getUsername());
         boolean stagesContactUpdate = attributes.entrySet().stream()
                 .anyMatch(attribute -> isVerifiableContactAttribute(attribute.getKey())
                         && shouldVerifyAttribute(pool, attribute.getKey())
-                        && !customMessageInvocationActive
                         && !isExplicitlyVerified(attributes, attribute.getKey())
                         && blankToNull(attribute.getValue()) != null);
         CognitoUser updatedUser = stagesContactUpdate
@@ -2734,7 +2729,6 @@ public class CognitoService implements ResourceProvider {
                     updatedUser.getAttributes().remove(attributeName + "_verified");
                     clearPendingAttributeVerification(userPoolId, updatedUser, attributeName);
                 } else if (contact && shouldVerifyAttribute(pool, attributeName)
-                        && !customMessageInvocationActive
                         && !isExplicitlyVerified(attributes, attributeName)) {
                     clearPendingAttributeVerification(userPoolId, updatedUser, attributeName);
                     ensureVerificationWiring();
@@ -2757,9 +2751,6 @@ public class CognitoService implements ResourceProvider {
                     if (contact && isExplicitlyVerified(attributes, attributeName)) {
                         updatedUser.getAttributes().put(attributeName + "_verified", "true");
                         updatedUser.getPendingAttributes().remove(attributeName);
-                    } else if (contact && customMessageInvocationActive
-                            && shouldVerifyAttribute(pool, attributeName)) {
-                        updatedUser.getAttributes().put(attributeName + "_verified", "false");
                     }
                 }
             }

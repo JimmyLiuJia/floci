@@ -77,7 +77,6 @@ final class CognitoAuthFlowHandler {
     private final ConcurrentHashMap<String, CustomAuthToken> customAuthSessions = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, TotpSession> totpSessions = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, MfaSession> mfaSessions = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<String, AtomicInteger> customMessageInvocations = new ConcurrentHashMap<>();
     /**
      * Guards both USER_AUTH session maps and nothing else: no storage I/O or Lambda trigger runs under it,
      * so one user's sign-in cannot hold up another's. The code store redeems sign-in codes, once, outside it.
@@ -1667,12 +1666,6 @@ final class CognitoAuthFlowHandler {
         String region = regionForPool(pool);
         String clientId = client == null ? CLIENT_ID_NOT_APPLICABLE : client.getClientId();
         Map<String, Object> event = triggerEvent(pool, clientId, user, triggerKey, triggerSource, request);
-        String customMessageKey = "CustomMessage".equals(triggerKey) && user != null
-                ? customMessageInvocationKey(pool, user) : null;
-        if (customMessageKey != null) {
-            customMessageInvocations.computeIfAbsent(customMessageKey, ignored -> new AtomicInteger())
-                    .incrementAndGet();
-        }
 
         try {
             byte[] payload = MAPPER.writeValueAsBytes(event);
@@ -1713,21 +1706,7 @@ final class CognitoAuthFlowHandler {
         } catch (Exception e) {
             LOG.warnv(e, "Cognito trigger {0} invocation failed", triggerKey);
             return TriggerResult.error(TriggerErrorKind.INVOCATION_FAILED, e.getMessage());
-        } finally {
-            if (customMessageKey != null) {
-                customMessageInvocations.computeIfPresent(customMessageKey, (key, count) ->
-                        count.decrementAndGet() == 0 ? null : count);
-            }
         }
-    }
-
-    boolean customMessageInvocationActive(String userPoolId, String username) {
-        AtomicInteger count = customMessageInvocations.get(userPoolId + "::" + username);
-        return count != null && count.get() > 0;
-    }
-
-    private static String customMessageInvocationKey(UserPool pool, CognitoUser user) {
-        return pool.getId() + "::" + user.getUsername();
     }
 
     /** The event every trigger receives: the common parameters around the trigger's own request. */
