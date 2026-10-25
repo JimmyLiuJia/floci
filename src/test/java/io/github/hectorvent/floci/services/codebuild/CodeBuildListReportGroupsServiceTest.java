@@ -12,6 +12,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -23,7 +24,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 
-class CodeBuildListReportGroupsTest {
+class CodeBuildListReportGroupsServiceTest {
 
     private static final String REGION = "us-east-1";
     private static final String ACCOUNT = "000000000000";
@@ -105,6 +106,40 @@ class CodeBuildListReportGroupsTest {
                 "nextToken", first.path("nextToken").asText()));
         assertEquals(List.of(beta.getArn(), gamma.getArn()), arns(last));
         assertFalse(last.has("nextToken"));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void keepsCursorSortValueWhenReportGroupChangesDuringPageConstruction() throws Exception {
+        ReportGroup alpha = createGroup("alpha");
+        ReportGroup beta = createGroup("beta");
+        beta.setLastModified(2.0);
+        ReportGroup changing = new ReportGroup() {
+            private boolean changed;
+
+            @Override
+            public String getArn() {
+                if (!changed) {
+                    setLastModified(99.0);
+                    changed = true;
+                }
+                return super.getArn();
+            }
+        };
+        changing.setArn(alpha.getArn());
+        changing.setName(alpha.getName());
+        changing.setLastModified(1.0);
+        Field field = CodeBuildService.class.getDeclaredField("reportGroups");
+        field.setAccessible(true);
+        Map<String, Map<String, ReportGroup>> regions =
+                (Map<String, Map<String, ReportGroup>>) field.get(service);
+        regions.get(REGION).put(alpha.getArn(), changing);
+
+        JsonNode first = list(Map.of("maxResults", 1, "sortBy", "LAST_MODIFIED_TIME"));
+        assertEquals(List.of(alpha.getArn()), arns(first));
+        JsonNode second = list(Map.of("maxResults", 1, "sortBy", "LAST_MODIFIED_TIME",
+                "nextToken", first.path("nextToken").asText()));
+        assertEquals(List.of(beta.getArn()), arns(second));
     }
 
     @Test
