@@ -3,6 +3,7 @@ package io.github.hectorvent.floci.services.athena;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.hectorvent.floci.core.common.AwsException;
+import io.github.hectorvent.floci.core.common.PaginatedResult;
 import io.github.hectorvent.floci.services.athena.model.CreateWorkGroupRequest;
 import io.github.hectorvent.floci.services.athena.model.QueryExecution;
 import io.github.hectorvent.floci.services.athena.model.QueryExecutionContext;
@@ -80,9 +81,9 @@ public class AthenaJsonHandler {
                 }
                 int pageSize = maxResults == null ? 50 : maxResults.asInt();
                 String nextToken = request.hasNonNull("NextToken") ? request.get("NextToken").asText() : null;
-                AthenaService.WorkGroupPage page = athenaService.listWorkGroupsPage(region, pageSize, nextToken);
+                PaginatedResult<Map<String, Object>> page = athenaService.listWorkGroupsPage(region, pageSize, nextToken);
                 Map<String, Object> response = new LinkedHashMap<>();
-                response.put("WorkGroups", page.workGroups());
+                response.put("WorkGroups", page.items());
                 if (page.nextToken() != null) {
                     response.put("NextToken", page.nextToken());
                 }
