@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import io.github.hectorvent.floci.config.EmulatorConfig;
 import io.github.hectorvent.floci.core.common.AwsArnUtils;
 import io.github.hectorvent.floci.core.common.AwsException;
+import io.github.hectorvent.floci.core.common.Base64Url;
 import io.github.hectorvent.floci.core.common.CsvParser;
 import io.github.hectorvent.floci.core.storage.StorageBackend;
 import io.github.hectorvent.floci.core.storage.StorageFactory;
@@ -361,6 +362,36 @@ public class AthenaService {
                 .map(this::toWorkGroupSummary)
                 .toList());
         return workGroups;
+    }
+
+    public WorkGroupPage listWorkGroupsPage(String region, int maxResults, String nextToken) {
+        if (maxResults < 1 || maxResults > 50) {
+            throw new AwsException("InvalidRequestException", "MaxResults must be between 1 and 50", 400);
+        }
+        List<Map<String, Object>> workGroups = listWorkGroups(region);
+        int start = 0;
+        if (nextToken != null) {
+            try {
+                String[] cursor = Base64Url.decode(nextToken).split(":", 3);
+                if (cursor.length != 3 || !"ListWorkGroups".equals(cursor[0])
+                        || !region.equals(cursor[1])) {
+                    throw new IllegalArgumentException("Invalid NextToken");
+                }
+                start = Integer.parseInt(cursor[2]);
+                if (start < 0 || start > workGroups.size()) {
+                    throw new IllegalArgumentException("Invalid NextToken");
+                }
+            } catch (IllegalArgumentException e) {
+                throw new AwsException("InvalidRequestException", "Invalid NextToken", 400);
+            }
+        }
+        int end = Math.min(start + maxResults, workGroups.size());
+        String continuation = end < workGroups.size()
+                ? Base64Url.encode("ListWorkGroups:" + region + ":" + end) : null;
+        return new WorkGroupPage(workGroups.subList(start, end), continuation);
+    }
+
+    public record WorkGroupPage(List<Map<String, Object>> workGroups, String nextToken) {
     }
 
     /**

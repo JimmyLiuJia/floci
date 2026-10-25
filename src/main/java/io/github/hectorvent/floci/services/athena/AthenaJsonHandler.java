@@ -73,7 +73,21 @@ public class AthenaJsonHandler {
                 String name = request.has("WorkGroup") ? request.get("WorkGroup").asText() : "primary";
                 yield Response.ok(Map.of("WorkGroup", athenaService.getWorkGroup(name, region))).build();
             }
-            case "ListWorkGroups" -> Response.ok(Map.of("WorkGroups", athenaService.listWorkGroups(region))).build();
+            case "ListWorkGroups" -> {
+                JsonNode maxResults = request.get("MaxResults");
+                if (maxResults != null && (!maxResults.isIntegralNumber() || !maxResults.canConvertToInt())) {
+                    throw new AwsException("InvalidRequestException", "Invalid MaxResults", 400);
+                }
+                int pageSize = maxResults == null ? 50 : maxResults.asInt();
+                String nextToken = request.hasNonNull("NextToken") ? request.get("NextToken").asText() : null;
+                AthenaService.WorkGroupPage page = athenaService.listWorkGroupsPage(region, pageSize, nextToken);
+                Map<String, Object> response = new LinkedHashMap<>();
+                response.put("WorkGroups", page.workGroups());
+                if (page.nextToken() != null) {
+                    response.put("NextToken", page.nextToken());
+                }
+                yield Response.ok(response).build();
+            }
             case "CreateWorkGroup" -> {
                 CreateWorkGroupRequest createRequest = mapper.treeToValue(request, CreateWorkGroupRequest.class);
                 athenaService.createWorkGroup(createRequest, region);
