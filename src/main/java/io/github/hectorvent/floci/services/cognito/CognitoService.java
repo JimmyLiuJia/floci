@@ -2732,8 +2732,17 @@ public class CognitoService implements ResourceProvider {
                 } else if (contact && shouldVerifyAttribute(pool, attributeName)
                         && !isExplicitlyVerified(attributes, attributeName)) {
                     String pending = updatedUser.getPendingAttributes().get(attributeName);
-                    if (value.equals(pending) || value.equals(updatedUser.getAttributes().get(attributeName))) {
+                    boolean sameCurrent = value.equals(updatedUser.getAttributes().get(attributeName));
+                    if (sameCurrent && "true".equalsIgnoreCase(
+                            updatedUser.getAttributes().get(attributeName + "_verified"))) {
                         continue;
+                    }
+                    if (value.equals(pending) || sameCurrent) {
+                        ensureVerificationWiring();
+                        if (verificationCodeService.hasUsableCode(
+                                userPoolId, updatedUser.getUsername(), verificationPurpose(attributeName))) {
+                            continue;
+                        }
                     }
                     clearPendingAttributeVerification(userPoolId, updatedUser, attributeName);
                     ensureVerificationWiring();

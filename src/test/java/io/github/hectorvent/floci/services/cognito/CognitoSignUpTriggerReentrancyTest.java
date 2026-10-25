@@ -363,6 +363,42 @@ class CognitoSignUpTriggerReentrancyTest {
     }
 
     @Test
+    void failedAttributeDeliveryCanBeRetriedWithTheSameContact() {
+        SnsService selectiveSms = mock(SnsService.class);
+        AtomicInteger attempts = new AtomicInteger();
+        AtomicReference<String> deliveredCode = new AtomicReference<>();
+        when(selectiveSms.publish(any(), any(), any(), any(), any(), any(), any()))
+                .thenAnswer(invocation -> {
+                    if (attempts.incrementAndGet() == 1) {
+                        throw new IllegalStateException("SMS unavailable");
+                    }
+                    deliveredCode.set(((String) invocation.getArgument(3)).replaceAll("\\D", ""));
+                    return "sent";
+                });
+        service = serviceWithSns(selectiveSms);
+        UserPool pool = service.createUserPool(Map.of(
+                "PoolName", "retry-attribute-code",
+                "AutoVerifiedAttributes", List.of("phone_number"),
+                "UserAttributeUpdateSettings", Map.of(
+                        "AttributesRequireVerificationBeforeUpdate", List.of("phone_number"))), "us-east-1");
+        service.adminCreateUser(pool.getId(), "alice", Map.of(
+                "phone_number", PHONE, "phone_number_verified", "true"), "TempPass1!", "SUPPRESS");
+        String replacement = "+12025550124";
+
+        AwsException firstFailure = assertThrows(AwsException.class,
+                () -> service.adminUpdateUserAttributes(pool.getId(), "alice",
+                        Map.of("phone_number", replacement)));
+        assertEquals("CodeDeliveryFailureException", firstFailure.getErrorCode());
+
+        service.adminUpdateUserAttributes(pool.getId(), "alice", Map.of("phone_number", replacement));
+
+        assertEquals(2, attempts.get());
+        assertNotNull(deliveredCode.get());
+        codes.consume(pool.getId(), "alice", VerificationCode.Purpose.PHONE_ATTRIBUTE_VERIFICATION,
+                deliveredCode.get());
+    }
+
+    @Test
     void preSignUpRejectsSameUsernameAdminCreationWithoutBlockingTheTrigger() throws Exception {
         UserPool pool = pool(Map.of("PreSignUp", FUNCTION));
         UserPoolClient client = client(pool);
@@ -441,7 +477,8 @@ class CognitoSignUpTriggerReentrancyTest {
 
         assertNull(callbackFailure.get());
         assertEquals(deletePhone ? 1 : 2, sns.getSentMessages().size());
-        assertEquals(PHONE, sns.getSentMessages().getLast().getPhoneNumber());
+        assertEquals(1, sns.getSentMessages().stream()
+                .filter(message -> PHONE.equals(message.getPhoneNumber())).count());
         assertEquals(Map.of("AttributeName", "phone_number", "DeliveryMedium", "SMS", "Destination", "+*******0123"),
                 service.signUpCodeDeliveryDetails(result));
     }

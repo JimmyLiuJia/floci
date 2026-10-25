@@ -193,6 +193,16 @@ public final class VerificationCodeService {
         invalidate(VerificationCode.storageKey(userPoolId, username, purpose));
     }
 
+    public boolean hasUsableCode(String userPoolId, String username,
+                                 VerificationCode.Purpose purpose) {
+        String key = VerificationCode.storageKey(userPoolId, username, purpose);
+        synchronized (lockFor(key)) {
+            return store.get(key).map(code -> !code.isConsumed()
+                    && !code.isExpired(clock.instant())
+                    && code.getAttemptsRemaining() > 0).orElse(false);
+        }
+    }
+
     /** Withdraw only the code issued by the caller, preserving a newer replacement. */
     public void invalidateIfCurrent(String userPoolId, String username,
                                     VerificationCode.Purpose purpose, IssuedCode issued) {

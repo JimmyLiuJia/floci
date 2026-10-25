@@ -178,6 +178,21 @@ class VerificationCodeServiceTest {
     }
 
     @Test
+    void hasUsableCode_excludesWithdrawnAndExpiredCodes() {
+        VerificationCode.Purpose purpose = VerificationCode.Purpose.PHONE_ATTRIBUTE_VERIFICATION;
+        assertEquals(false, service.hasUsableCode("pool", "alice", purpose));
+        VerificationCodeService.IssuedCode issued = service.issueTracked(
+                "pool", "alice", purpose, Duration.ofMinutes(15));
+        assertTrue(service.hasUsableCode("pool", "alice", purpose));
+        service.invalidateIfCurrent("pool", "alice", purpose, issued);
+        assertEquals(false, service.hasUsableCode("pool", "alice", purpose));
+
+        service.issueTracked("pool", "alice", purpose, Duration.ofMinutes(15));
+        clock.advance(Duration.ofMinutes(16));
+        assertEquals(false, service.hasUsableCode("pool", "alice", purpose));
+    }
+
+    @Test
     void invalidateIfCurrent_preservesNewerCode() {
         VerificationCode.Purpose purpose = VerificationCode.Purpose.PHONE_ATTRIBUTE_VERIFICATION;
         VerificationCodeService.IssuedCode first = service.issueTracked(

@@ -2678,6 +2678,7 @@ class CognitoServiceTest {
         when(verificationCodeService.issue(any(), any(), any(), any())).thenReturn("123456");
         when(verificationCodeService.issueTracked(any(), any(), any(), any()))
                 .thenReturn(new VerificationCodeService.IssuedCode("123456", "test-hash"));
+        when(verificationCodeService.hasUsableCode(any(), any(), any())).thenReturn(true);
         CognitoService serviceWithVerification = new CognitoService(
                 new InMemoryStorage<>(),
                 new InMemoryStorage<>(),
