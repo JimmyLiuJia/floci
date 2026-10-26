@@ -16,6 +16,9 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.function.Executable;
 
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -476,6 +479,28 @@ class RamServiceTest {
         ResourceShare tagged = service.getResourceShares(OWNER, "SELF", "us-east-1").get(0);
         assertTrue(tagged.getLastUpdatedTime().isAfter(renamed.getLastUpdatedTime()));
         assertEquals(created.getCreationTime(), tagged.getCreationTime());
+    }
+
+    @Test
+    void consecutiveWritesInOneClockTickAdvanceLastUpdatedTime() {
+        Clock fixedClock = Clock.fixed(Instant.parse("2030-01-01T00:00:00Z"), ZoneOffset.UTC);
+        RamService fixedClockService = new RamService(new SharedStorageFactory(), null, fixedClock);
+        fixedClockService.initializeStorage();
+
+        ResourceShare created = fixedClockService.createResourceShare(
+                "original", List.of(), List.of(), false, "us-east-1", OWNER);
+        String arn = created.getResourceShareArn();
+        ResourceShare firstUpdate = fixedClockService.updateResourceShare(
+                arn, "first", null, OWNER, "us-east-1");
+        ResourceShare secondUpdate = fixedClockService.updateResourceShare(
+                arn, "second", null, OWNER, "us-east-1");
+
+        assertEquals(created.getCreationTime(), firstUpdate.getCreationTime());
+        assertEquals(created.getCreationTime(), secondUpdate.getCreationTime());
+        assertTrue(firstUpdate.getLastUpdatedTime().toEpochMilli()
+                > created.getLastUpdatedTime().toEpochMilli());
+        assertTrue(secondUpdate.getLastUpdatedTime().toEpochMilli()
+                > firstUpdate.getLastUpdatedTime().toEpochMilli());
     }
 
     @Test

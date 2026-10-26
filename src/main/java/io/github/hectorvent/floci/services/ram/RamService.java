@@ -21,6 +21,7 @@ import jakarta.annotation.PostConstruct;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
+import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -73,14 +74,20 @@ public class RamService {
 
     private final StorageFactory storageFactory;
     private final OrganizationsService organizationsService;
+    private final Clock clock;
     private StorageBackend<String, ResourceShare> shares;
     private StorageBackend<String, Boolean> settings;
     private StorageBackend<String, ResourceShareInvitation> invitations;
 
     @Inject
     public RamService(StorageFactory storageFactory, OrganizationsService organizationsService) {
+        this(storageFactory, organizationsService, Clock.systemUTC());
+    }
+
+    RamService(StorageFactory storageFactory, OrganizationsService organizationsService, Clock clock) {
         this.storageFactory = storageFactory;
         this.organizationsService = organizationsService;
+        this.clock = clock;
     }
 
     /** Constructor used by isolated service tests with an explicit Organizations test double. */
@@ -580,7 +587,11 @@ public class RamService {
      * remember to do it. Returns the stamped share so callers respond with what was stored.
      */
     private ResourceShare putForOwner(ResourceShare share) {
-        ResourceShare stamped = share.withLastUpdatedTime(Instant.now());
+        Instant now = clock.instant();
+        if (now.toEpochMilli() <= share.getLastUpdatedTime().toEpochMilli()) {
+            now = Instant.ofEpochMilli(share.getLastUpdatedTime().toEpochMilli() + 1);
+        }
+        ResourceShare stamped = share.withLastUpdatedTime(now);
         if (shares instanceof AccountAwareStorageBackend<ResourceShare> accountAware) {
             accountAware.putForAccount(
                     stamped.getOwningAccountId(), stamped.getResourceShareArn(), stamped);
