@@ -72,6 +72,27 @@ class SageMakerIntegrationTest {
     }
 
     @Test
+    void listModelsReportsAllInvalidSortEnums() {
+        String sortByError = "Value 'BadBy' at 'sortBy' failed to satisfy constraint: "
+                + "Member must satisfy enum value set: [Name, CreationTime]";
+        String sortOrderError = "Value 'BadOrder' at 'sortOrder' failed to satisfy constraint: "
+                + "Member must satisfy enum value set: [Ascending, Descending]";
+
+        post("SageMaker.ListModels", "{\"SortBy\":\"BadBy\",\"SortOrder\":\"BadOrder\"}")
+                .then().statusCode(400)
+                .body("__type", equalTo("ValidationException"))
+                .body("message", equalTo("2 validation errors detected: " + sortByError + "; " + sortOrderError));
+        post("SageMaker.ListModels", "{\"SortBy\":\"BadBy\"}")
+                .then().statusCode(400)
+                .body("__type", equalTo("ValidationException"))
+                .body("message", equalTo("1 validation error detected: " + sortByError));
+        post("SageMaker.ListModels", "{\"SortOrder\":\"BadOrder\"}")
+                .then().statusCode(400)
+                .body("__type", equalTo("ValidationException"))
+                .body("message", equalTo("1 validation error detected: " + sortOrderError));
+    }
+
+    @Test
     void listModels_respectsRequestedNameDescendingOrder() {
         String suffix = Long.toString(System.nanoTime(), 36);
         String first = "a-model-" + suffix;

@@ -10,6 +10,7 @@ import io.github.hectorvent.floci.core.common.AwsArnUtils;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.Base64Url;
 import io.github.hectorvent.floci.core.common.RegionResolver;
+import io.github.hectorvent.floci.core.common.SmithyValidationErrors;
 import io.github.hectorvent.floci.core.storage.StorageBackend;
 import io.github.hectorvent.floci.core.storage.StorageFactory;
 import io.github.hectorvent.floci.services.sagemaker.model.SageMakerEntities.EndpointConfigResource;
@@ -143,12 +144,16 @@ public class SageMakerService {
 
     public ObjectNode listModels(JsonNode request, String region) {
         String sortBy = text(request, "SortBy");
-        if (sortBy != null && !sortBy.equals("Name") && !sortBy.equals("CreationTime")) {
-            throw validation("SortBy must be Name or CreationTime.");
-        }
         String sortOrder = text(request, "SortOrder");
+        List<String> violations = new ArrayList<>();
+        if (sortBy != null && !sortBy.equals("Name") && !sortBy.equals("CreationTime")) {
+            violations.add(SmithyValidationErrors.notInEnum(sortBy, "sortBy", List.of("Name", "CreationTime")));
+        }
         if (sortOrder != null && !sortOrder.equals("Ascending") && !sortOrder.equals("Descending")) {
-            throw validation("SortOrder must be Ascending or Descending.");
+            violations.add(SmithyValidationErrors.notInEnum(sortOrder, "sortOrder", List.of("Ascending", "Descending")));
+        }
+        if (!violations.isEmpty()) {
+            throw SmithyValidationErrors.validationException(violations);
         }
         Comparator<ModelResource> comparator = "Name".equals(sortBy)
                 ? Comparator.comparing(m -> m.modelName)
