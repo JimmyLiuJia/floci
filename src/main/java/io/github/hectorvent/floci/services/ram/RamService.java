@@ -584,12 +584,20 @@ public class RamService {
     /**
      * The single write seam: every create and every mutation lands here. Existing shares are
      * stamped here so lastUpdatedTime advances without six call sites having to remember to do it;
-     * a fresh share keeps its equal creation and last-updated timestamps. Returns the stored share.
+     * a fresh share keeps its equal creation and last-updated timestamps. The read, timestamp
+     * calculation, and write are one critical section so concurrent mutations cannot reuse a stamp.
+     * Returns the stored share.
      */
-    private ResourceShare putForOwner(ResourceShare share) {
-        Optional<ResourceShare> previous = shares instanceof AccountAwareStorageBackend<ResourceShare> accountAware
-                ? accountAware.getForAccount(share.getOwningAccountId(), share.getResourceShareArn())
-                : shares.get(share.getResourceShareArn());
+    private synchronized ResourceShare putForOwner(ResourceShare share) {
+        String owningAccountId = share.getOwningAccountId();
+        Optional<ResourceShare> previous;
+        if (shares instanceof AccountAwareStorageBackend<ResourceShare> accountAware) {
+            previous = accountAware.getForAccountMigratingLegacy(
+                    owningAccountId, share.getResourceShareArn(),
+                    candidate -> owningAccountId.equals(candidate.getOwningAccountId()));
+        } else {
+            previous = shares.get(share.getResourceShareArn());
+        }
         ResourceShare stamped = share;
         if (previous.isPresent()) {
             Instant now = clock.instant();
