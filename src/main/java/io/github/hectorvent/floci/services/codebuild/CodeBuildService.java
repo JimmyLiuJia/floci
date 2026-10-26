@@ -683,7 +683,9 @@ public class CodeBuildService {
 
     public BuildPage listBuildsForProjectPage(String region, String account, String projectName,
                                               String sortOrder, String nextToken) {
-        Objects.requireNonNull(projectName);
+        if (projectName == null || projectName.isEmpty()) {
+            throw new AwsException("InvalidInputException", "projectName is required", 400);
+        }
         return paginateBuilds(region, account, projectName, sortOrder, nextToken, true);
     }
 

@@ -146,6 +146,14 @@ class CodeBuildBuildListPaginationTest {
     }
 
     @Test
+    void projectNameIsRequiredForProjectBuildListing() {
+        AwsException error = assertThrows(AwsException.class,
+                () -> list("ListBuildsForProject", Map.of()));
+        assertEquals("InvalidInputException", error.getErrorCode());
+        assertEquals(400, error.getHttpStatus());
+    }
+
+    @Test
     void continuationRejectsOtherRequestScopesAndMalformedTokens() throws Exception {
         createBuilds(101);
         String globalToken = list("ListBuilds", Map.of()).path("nextToken").asText();
