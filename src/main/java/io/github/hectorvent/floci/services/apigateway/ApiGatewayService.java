@@ -3477,7 +3477,8 @@ public class ApiGatewayService implements ResourceProvider {
                 if ("VPC_LINK".equals(nextConnectionType)) {
                     if (nextConnectionId == null || nextConnectionId.isBlank()
                             || (!nextConnectionId.matches("\\$\\{stageVariables\\.[A-Za-z0-9_]+\\}")
-                                    && vpcLinkStore.get(vpcLinkKey(region, nextConnectionId)).isEmpty())) {
+                                    && vpcLinkStore.get(vpcLinkKey(region, nextConnectionId)).isEmpty()
+                                    && !apiGatewayV2Service.hasVpcLink(region, nextConnectionId))) {
                         throw new AwsException("BadRequestException",
                                 "Invalid VPC link identifier specified: " + nextConnectionId, 400);
                     }

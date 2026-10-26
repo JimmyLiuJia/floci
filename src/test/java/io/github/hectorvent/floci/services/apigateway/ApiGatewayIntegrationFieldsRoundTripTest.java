@@ -386,6 +386,39 @@ class ApiGatewayIntegrationFieldsRoundTripTest {
     }
 
     @Test
+    void updateIntegrationAcceptsVpcLinkV2Connection() {
+        given().contentType(ContentType.JSON)
+                .body("{\"type\":\"HTTP_PROXY\",\"httpMethod\":\"POST\","
+                        + "\"uri\":\"http://example.invalid/widget\"}")
+                .when().put(integrationPath()).then().statusCode(201);
+
+        String linkId = given().contentType(ContentType.JSON)
+                .body("""
+                        {"name":"integration-patch-v2-link","subnetIds":["subnet-test"],
+                         "securityGroupIds":["sg-test"]}
+                        """)
+                .when().post("/v2/vpclinks").then().statusCode(201)
+                .extract().path("vpcLinkId");
+        try {
+            given().contentType(ContentType.JSON)
+                    .body("""
+                            {"patchOperations":[
+                              {"op":"replace","path":"/connectionType","value":"VPC_LINK"},
+                              {"op":"replace","path":"/connectionId","value":"%s"}
+                            ]}
+                            """.formatted(linkId))
+                    .when().patch(integrationPath()).then().statusCode(200)
+                    .body("connectionType", equalTo("VPC_LINK"))
+                    .body("connectionId", equalTo(linkId));
+
+            given().when().get(integrationPath()).then().statusCode(200)
+                    .body("connectionId", equalTo(linkId));
+        } finally {
+            given().when().delete("/v2/vpclinks/" + linkId).then().statusCode(202);
+        }
+    }
+
+    @Test
     void getIntegrationResponseReturnsItsContentHandling() {
         putFullIntegration();
 
