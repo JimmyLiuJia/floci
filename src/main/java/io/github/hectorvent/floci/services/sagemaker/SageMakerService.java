@@ -140,8 +140,21 @@ public class SageMakerService {
     }
 
     public ObjectNode listModels(JsonNode request, String region) {
-        List<ModelResource> models = modelStore.scan(k -> k.startsWith(region + "::")).stream()
-                .sorted(Comparator.comparing(m -> m.modelName)).toList();
+        String sortBy = text(request, "SortBy");
+        if (sortBy != null && !sortBy.equals("Name") && !sortBy.equals("CreationTime")) {
+            throw validation("SortBy must be Name or CreationTime.");
+        }
+        String sortOrder = text(request, "SortOrder");
+        if (sortOrder != null && !sortOrder.equals("Ascending") && !sortOrder.equals("Descending")) {
+            throw validation("SortOrder must be Ascending or Descending.");
+        }
+        Comparator<ModelResource> comparator = "Name".equals(sortBy)
+                ? Comparator.comparing(m -> m.modelName)
+                : Comparator.comparingLong((ModelResource m) -> m.creationTime).thenComparing(m -> m.modelName);
+        if (sortOrder == null || sortOrder.equals("Descending")) {
+            comparator = comparator.reversed();
+        }
+        List<ModelResource> models = modelStore.scan(k -> k.startsWith(region + "::")).stream().sorted(comparator).toList();
         String nameContains = text(request, "NameContains");
         if (nameContains != null && !nameContains.isBlank()) {
             models = models.stream().filter(m -> m.modelName.contains(nameContains)).toList();
@@ -609,9 +622,8 @@ public class SageMakerService {
 
     /**
      * Applies AWS's {@code MaxResults}/{@code NextToken} contract to an already-filtered,
-     * name-sorted list: {@code MaxResults} (1-100, default {@value #DEFAULT_LIMIT}) caps the
-     * page, and an opaque {@code NextToken} (the last name returned) resumes strictly after it,
-     * matching the sort the caller applied.
+     * sorted list: {@code MaxResults} (1-100, default {@value #DEFAULT_LIMIT}) caps the
+     * page, and {@code NextToken} (the last name returned) resumes after that item.
      */
     private <T> ObjectNode paginate(List<T> sorted, JsonNode request, Function<T, String> nameOf,
                                     BiConsumer<T, ObjectNode> render, String itemsField) {
@@ -619,7 +631,7 @@ public class SageMakerService {
         String nextToken = text(request, "NextToken");
         List<T> remaining = sorted;
         if (nextToken != null && !nextToken.isBlank()) {
-            remaining = remaining.stream().dropWhile(v -> nameOf.apply(v).compareTo(nextToken) <= 0).toList();
+            remaining = remaining.stream().dropWhile(v -> !nameOf.apply(v).equals(nextToken)).skip(1).toList();
         }
         List<T> page = remaining.stream().limit(max).toList();
         ArrayNode arr = mapper.createArrayNode();

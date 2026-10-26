@@ -6,6 +6,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import static io.restassured.RestAssured.given;
+import static org.hamcrest.Matchers.contains;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.notNullValue;
@@ -55,6 +56,24 @@ class SageMakerIntegrationTest {
     void trainingJobValidationErrorsUseAwsJsonErrorShape() {
         post("SageMaker.CreateTrainingJob", "{\"TrainingJobName\":\"bad\"}")
                 .then().statusCode(400).body("__type", equalTo("ValidationException"));
+    }
+
+    @Test
+    void listModels_respectsRequestedNameDescendingOrder() {
+        String suffix = Long.toString(System.nanoTime(), 36);
+        String first = "a-model-" + suffix;
+        String second = "z-model-" + suffix;
+        for (String name : new String[] {first, second}) {
+            post("SageMaker.CreateModel", """
+                    {"ModelName":"%s","PrimaryContainer":{"Image":"busybox:stable"}}
+                    """.formatted(name)).then().statusCode(200);
+        }
+
+        post("SageMaker.ListModels", """
+                {"NameContains":"%s","SortBy":"Name","SortOrder":"Descending"}
+                """.formatted(suffix))
+                .then().statusCode(200)
+                .body("Models.ModelName", contains(second, first));
     }
 
     private io.restassured.response.Response post(String target, String body) {

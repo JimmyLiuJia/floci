@@ -11,6 +11,7 @@ import io.github.hectorvent.floci.services.sagemaker.model.SageMakerEntities.Mod
 import io.github.hectorvent.floci.services.sagemaker.model.SageMakerEntities.TrainingJobResource;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -79,16 +80,80 @@ class SageMakerServiceTest {
                 () -> service.listModels(mapper.readTree("{\"MaxResults\":0}"), "us-east-1"));
         assertEquals("ValidationException", badMax.getErrorCode());
 
-        JsonNode firstPage = service.listModels(mapper.readTree("{\"MaxResults\":2}"), "us-east-1");
+        JsonNode firstPage = service.listModels(mapper.readTree("{\"MaxResults\":2,\"SortBy\":\"Name\",\"SortOrder\":\"Ascending\"}"), "us-east-1");
         assertEquals(2, firstPage.path("Models").size());
         assertEquals("a", firstPage.path("Models").get(0).path("ModelName").asText());
         String nextToken = firstPage.path("NextToken").asText();
         assertEquals("b", nextToken);
 
         JsonNode secondPage = service.listModels(
-                mapper.readTree("{\"MaxResults\":2,\"NextToken\":\"" + nextToken + "\"}"), "us-east-1");
+                mapper.readTree("{\"MaxResults\":2,\"SortBy\":\"Name\",\"SortOrder\":\"Ascending\",\"NextToken\":\"" + nextToken + "\"}"), "us-east-1");
         assertEquals(1, secondPage.path("Models").size());
         assertEquals("c", secondPage.path("Models").get(0).path("ModelName").asText());
+        assertTrue(secondPage.path("NextToken").isMissingNode());
+    }
+
+    @Test
+    void listModelsSortsByRequestedKeyAndResumesInDescendingOrder() throws Exception {
+        InMemoryStorage<String, ModelResource> models = new InMemoryStorage<>();
+        for (String name : List.of("a", "m", "z")) {
+            ModelResource model = new ModelResource();
+            model.modelName = name;
+            model.creationTime = switch (name) {
+                case "a" -> 2000L;
+                case "m" -> 1000L;
+                default -> 3000L;
+            };
+            models.put("us-east-1::" + name, model);
+        }
+        SageMakerService service = new SageMakerService(models,
+                new InMemoryStorage<String, EndpointConfigResource>(),
+                new InMemoryStorage<String, EndpointResource>(),
+                new InMemoryStorage<String, TrainingJobResource>(),
+                new RegionResolver("us-east-1", "000000000000"), mapper,
+                mock(SageMakerEndpointManager.class), mock(SageMakerTrainingRunner.class));
+
+        JsonNode defaultOrder = service.listModels(mapper.readTree("{}"), "us-east-1");
+        assertEquals(List.of("z", "a", "m"), modelNames(defaultOrder));
+        JsonNode newestPage = service.listModels(mapper.readTree("{\"MaxResults\":2}"), "us-east-1");
+        assertEquals(List.of("z", "a"), modelNames(newestPage));
+        JsonNode olderPage = service.listModels(mapper.readTree("{\"MaxResults\":2,\"NextToken\":\"a\"}"), "us-east-1");
+        assertEquals(List.of("m"), modelNames(olderPage));
+        JsonNode oldestFirst = service.listModels(mapper.readTree("{\"SortBy\":\"CreationTime\",\"SortOrder\":\"Ascending\"}"), "us-east-1");
+        assertEquals(List.of("m", "a", "z"), modelNames(oldestFirst));
+
+        JsonNode firstPage = service.listModels(mapper.readTree("{\"SortBy\":\"Name\",\"SortOrder\":\"Descending\",\"MaxResults\":2}"), "us-east-1");
+        assertEquals(List.of("z", "m"), modelNames(firstPage));
+        JsonNode secondPage = service.listModels(mapper.readTree("{\"SortBy\":\"Name\",\"SortOrder\":\"Descending\",\"MaxResults\":2,\"NextToken\":\"m\"}"), "us-east-1");
+        assertEquals(List.of("a"), modelNames(secondPage));
+        assertTrue(secondPage.path("NextToken").isMissingNode());
+    }
+
+    private static List<String> modelNames(JsonNode response) {
+        List<String> names = new ArrayList<>();
+        response.path("Models").forEach(model -> names.add(model.path("ModelName").asText()));
+        return names;
+    }
+
+    @Test
+    void listEndpointConfigsStillPaginatesByName() throws Exception {
+        InMemoryStorage<String, EndpointConfigResource> configs = new InMemoryStorage<>();
+        for (String name : List.of("a", "b")) {
+            EndpointConfigResource config = new EndpointConfigResource();
+            config.endpointConfigName = name;
+            configs.put("us-east-1::" + name, config);
+        }
+        SageMakerService service = new SageMakerService(new InMemoryStorage<String, ModelResource>(), configs,
+                new InMemoryStorage<String, EndpointResource>(),
+                new InMemoryStorage<String, TrainingJobResource>(),
+                new RegionResolver("us-east-1", "000000000000"), mapper,
+                mock(SageMakerEndpointManager.class), mock(SageMakerTrainingRunner.class));
+
+        JsonNode firstPage = service.listEndpointConfigs(mapper.readTree("{\"MaxResults\":1}"), "us-east-1");
+        assertEquals("a", firstPage.path("EndpointConfigs").get(0).path("EndpointConfigName").asText());
+        assertEquals("a", firstPage.path("NextToken").asText());
+        JsonNode secondPage = service.listEndpointConfigs(mapper.readTree("{\"MaxResults\":1,\"NextToken\":\"a\"}"), "us-east-1");
+        assertEquals("b", secondPage.path("EndpointConfigs").get(0).path("EndpointConfigName").asText());
         assertTrue(secondPage.path("NextToken").isMissingNode());
     }
 
