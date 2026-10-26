@@ -164,6 +164,8 @@ public class ApiGatewayService implements ResourceProvider {
             "EDGE endpoint type is not supported for APIGatewayV2 domainName";
     /** The characters AWS allows in an API mapping key, its level separator included, and the most it takes. */
     private static final Pattern API_MAPPING_KEY = Pattern.compile("[A-Za-z0-9$\\-_.+!*'(),/]+");
+    static final Pattern VPC_LINK_STAGE_VARIABLE =
+            Pattern.compile("\\$\\{stageVariables\\.([A-Za-z0-9_]+)\\}");
     private static final int MAX_API_MAPPING_KEY_LENGTH = 300;
     private static final String MAPPING_KEY_SLASHES_MESSAGE =
             "API mapping key should not start with a '/' or have consecutive '/'s.";
@@ -3476,7 +3478,7 @@ public class ApiGatewayService implements ResourceProvider {
             if (connectionPatched) {
                 if ("VPC_LINK".equals(nextConnectionType)) {
                     if (nextConnectionId == null || nextConnectionId.isBlank()
-                            || (!nextConnectionId.matches("\\$\\{stageVariables\\.[A-Za-z0-9_]+\\}")
+                            || (!VPC_LINK_STAGE_VARIABLE.matcher(nextConnectionId).matches()
                                     && vpcLinkStore.get(vpcLinkKey(region, nextConnectionId)).isEmpty()
                                     && !apiGatewayV2Service.hasVpcLink(region, nextConnectionId))) {
                         throw new AwsException("BadRequestException",

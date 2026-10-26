@@ -106,8 +106,6 @@ public class ApiGatewayExecuteController {
 
     private static final Logger LOG = Logger.getLogger(ApiGatewayExecuteController.class);
     private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {};
-    private static final Pattern VPC_LINK_STAGE_VARIABLE =
-            Pattern.compile("\\$\\{stageVariables\\.([A-Za-z0-9_]+)\\}");
     private static final Set<String> V2_TEXT_CONTENT_TYPES = Set.of(
             MediaType.TEXT_PLAIN,
             MediaType.TEXT_HTML,
@@ -787,7 +785,7 @@ public class ApiGatewayExecuteController {
         }
         String connectionId = integration.getConnectionId();
         if (connectionId != null) {
-            Matcher stageVariable = VPC_LINK_STAGE_VARIABLE.matcher(connectionId);
+            Matcher stageVariable = ApiGatewayService.VPC_LINK_STAGE_VARIABLE.matcher(connectionId);
             if (stageVariable.matches()) {
                 connectionId = scope.stage().getVariables().get(stageVariable.group(1));
             }
