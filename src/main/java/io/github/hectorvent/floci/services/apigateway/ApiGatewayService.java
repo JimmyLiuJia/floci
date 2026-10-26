@@ -3425,6 +3425,10 @@ public class ApiGatewayService implements ResourceProvider {
         if (patchOperations != null) {
             String nextType = integration.getType();
             String nextTransferMode = integration.getResponseTransferMode();
+            String nextConnectionType = integration.getConnectionType();
+            String nextConnectionId = integration.getConnectionId();
+            boolean connectionPatched = false;
+            boolean connectionIdPatched = false;
             for (Map<String, String> op : patchOperations) {
                 String opType = op.get("op");
                 if (!"add".equals(opType) && !"replace".equals(opType)) {
@@ -3449,11 +3453,45 @@ public class ApiGatewayService implements ResourceProvider {
                     case "/responseTransferMode":
                         nextTransferMode = transferMode(value);
                         break;
+                    case "/connectionType":
+                        if (!"replace".equals(opType)) {
+                            throw new AwsException("BadRequestException", "Invalid operation", 400);
+                        }
+                        nextConnectionType = value;
+                        connectionPatched = true;
+                        break;
+                    case "/connectionId":
+                        if (!"replace".equals(opType)) {
+                            throw new AwsException("BadRequestException", "Invalid operation", 400);
+                        }
+                        nextConnectionId = value;
+                        connectionPatched = true;
+                        connectionIdPatched = true;
+                        break;
                     default:
                         throw new AwsException("BadRequestException", "Unsupported path: " + path, 400);
                 }
             }
             validateTransferMode(nextTransferMode, nextType);
+            if (connectionPatched) {
+                if ("VPC_LINK".equals(nextConnectionType)) {
+                    if (nextConnectionId == null || nextConnectionId.isBlank()
+                            || (!nextConnectionId.matches("\\$\\{stageVariables\\.[A-Za-z0-9_]+\\}")
+                                    && vpcLinkStore.get(vpcLinkKey(region, nextConnectionId)).isEmpty())) {
+                        throw new AwsException("BadRequestException",
+                                "Invalid VPC link identifier specified: " + nextConnectionId, 400);
+                    }
+                } else if ("INTERNET".equals(nextConnectionType)) {
+                    if (connectionIdPatched) {
+                        throw new AwsException("BadRequestException",
+                                "Connection ID requires VPC_LINK", 400);
+                    }
+                    nextConnectionId = null;
+                } else {
+                    throw new AwsException("BadRequestException",
+                            "Invalid connection type: " + nextConnectionType, 400);
+                }
+            }
             for (Map<String, String> op : patchOperations) {
                 String path = op.get("path");
                 String value = op.get("value");
@@ -3476,9 +3514,16 @@ public class ApiGatewayService implements ResourceProvider {
                     case "/responseTransferMode":
                         integration.setResponseTransferMode(transferMode(value));
                         break;
+                    case "/connectionType":
+                    case "/connectionId":
+                        break;
                     default:
                         throw new IllegalStateException("Unreachable: validated above");
                 }
+            }
+            if (connectionPatched) {
+                integration.setConnectionType(nextConnectionType);
+                integration.setConnectionId(nextConnectionId);
             }
         }
         resourceStore.put(resourceKey(region, apiId, resourceId), getResource(region, apiId, resourceId));
