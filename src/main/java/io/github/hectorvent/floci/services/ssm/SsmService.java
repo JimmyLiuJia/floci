@@ -764,10 +764,14 @@ public class SsmService implements ResourceProvider {
 
     /** A SecureString put without a KeyId is encrypted with the AWS managed key. */
     static String keyIdOf(Parameter parameter) {
-        if (!"SecureString".equals(parameter.getType())) {
+        return keyIdOf(parameter.getType(), parameter.getKeyId());
+    }
+
+    static String keyIdOf(String type, String keyId) {
+        if (!"SecureString".equals(type)) {
             return null;
         }
-        return parameter.getKeyId() != null ? parameter.getKeyId() : DEFAULT_SSM_KEY_ID;
+        return keyId != null ? keyId : DEFAULT_SSM_KEY_ID;
     }
 
     private static boolean matchesAny(String actual, ParameterStringFilter filter) {
