@@ -301,9 +301,8 @@ public class SsmJsonHandler {
             node.put("Version", h.getVersion());
             node.put("Value", h.getValue());
             node.put("Type", h.getType());
-            String keyId = SsmService.keyIdOf(h.getType(), h.getKeyId());
-            if (keyId != null) {
-                node.put("KeyId", keyId);
+            if (h.getKeyId() != null) {
+                node.put("KeyId", h.getKeyId());
             }
             node.put("LastModifiedDate", h.getLastModifiedDate().toEpochMilli() / 1000.0);
             if (h.getDescription() != null) {

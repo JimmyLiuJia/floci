@@ -303,9 +303,7 @@ public class SsmService implements ResourceProvider {
         Parameter parameter = new Parameter(name, value, type != null ? type : "String");
         parameter.setVersion(version);
         parameter.setDescription(description);
-        if ("SecureString".equals(parameter.getType())) {
-            parameter.setKeyId(keyId);
-        }
+        parameter.setKeyId(keyIdOf(parameter.getType(), keyId));
         parameter.setAllowedPattern(allowedPattern);
         // AWS keeps existing policies until new ones, or an empty list, are sent.
         if (policies == null) {
