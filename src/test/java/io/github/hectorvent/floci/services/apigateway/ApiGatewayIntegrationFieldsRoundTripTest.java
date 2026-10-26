@@ -1,11 +1,16 @@
 package io.github.hectorvent.floci.services.apigateway;
 
+import com.sun.net.httpserver.HttpServer;
 import io.quarkus.test.junit.QuarkusTest;
 import io.restassured.http.ContentType;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+
+import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
 
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.contains;
@@ -386,35 +391,57 @@ class ApiGatewayIntegrationFieldsRoundTripTest {
     }
 
     @Test
-    void updateIntegrationAcceptsVpcLinkV2Connection() {
-        given().contentType(ContentType.JSON)
-                .body("{\"type\":\"HTTP_PROXY\",\"httpMethod\":\"POST\","
-                        + "\"uri\":\"http://example.invalid/widget\"}")
-                .when().put(integrationPath()).then().statusCode(201);
-
-        String linkId = given().contentType(ContentType.JSON)
-                .body("""
-                        {"name":"integration-patch-v2-link","subnetIds":["subnet-test"],
-                         "securityGroupIds":["sg-test"]}
-                        """)
-                .when().post("/v2/vpclinks").then().statusCode(201)
-                .extract().path("vpcLinkId");
+    void updateIntegrationAcceptsVpcLinkV2Connection() throws IOException {
+        HttpServer backend = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        backend.createContext("/widget", exchange -> {
+            byte[] response = "v2-link-ok".getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, response.length);
+            exchange.getResponseBody().write(response);
+            exchange.close();
+        });
+        backend.start();
         try {
             given().contentType(ContentType.JSON)
-                    .body("""
-                            {"patchOperations":[
-                              {"op":"replace","path":"/connectionType","value":"VPC_LINK"},
-                              {"op":"replace","path":"/connectionId","value":"%s"}
-                            ]}
-                            """.formatted(linkId))
-                    .when().patch(integrationPath()).then().statusCode(200)
-                    .body("connectionType", equalTo("VPC_LINK"))
-                    .body("connectionId", equalTo(linkId));
+                    .body("{\"type\":\"HTTP_PROXY\",\"httpMethod\":\"POST\","
+                            + "\"uri\":\"http://127.0.0.1:" + backend.getAddress().getPort() + "/widget\"}")
+                    .when().put(integrationPath()).then().statusCode(201);
 
-            given().when().get(integrationPath()).then().statusCode(200)
-                    .body("connectionId", equalTo(linkId));
+            String linkId = given().contentType(ContentType.JSON)
+                    .body("""
+                            {"name":"integration-patch-v2-link","subnetIds":["subnet-test"],
+                             "securityGroupIds":["sg-test"]}
+                            """)
+                    .when().post("/v2/vpclinks").then().statusCode(201)
+                    .extract().path("vpcLinkId");
+            try {
+                given().contentType(ContentType.JSON)
+                        .body("""
+                                {"patchOperations":[
+                                  {"op":"replace","path":"/connectionType","value":"VPC_LINK"},
+                                  {"op":"replace","path":"/connectionId","value":"%s"}
+                                ]}
+                                """.formatted(linkId))
+                        .when().patch(integrationPath()).then().statusCode(200)
+                        .body("connectionType", equalTo("VPC_LINK"))
+                        .body("connectionId", equalTo(linkId));
+
+                given().when().get(integrationPath()).then().statusCode(200)
+                        .body("connectionId", equalTo(linkId));
+
+                String deploymentId = given().contentType(ContentType.JSON).body("{}")
+                        .when().post("/restapis/" + apiId + "/deployments")
+                        .then().statusCode(201).extract().path("id");
+                given().contentType(ContentType.JSON)
+                        .body("{\"stageName\":\"test\",\"deploymentId\":\"" + deploymentId + "\"}")
+                        .when().post("/restapis/" + apiId + "/stages").then().statusCode(201);
+
+                given().when().post("/execute-api/" + apiId + "/test/widget")
+                        .then().statusCode(200).body(equalTo("v2-link-ok"));
+            } finally {
+                given().when().delete("/v2/vpclinks/" + linkId).then().statusCode(202);
+            }
         } finally {
-            given().when().delete("/v2/vpclinks/" + linkId).then().statusCode(202);
+            backend.stop(0);
         }
     }
 
