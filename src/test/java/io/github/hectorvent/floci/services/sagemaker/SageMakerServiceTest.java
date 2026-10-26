@@ -117,7 +117,9 @@ class SageMakerServiceTest {
         assertEquals(List.of("z", "a", "m"), modelNames(defaultOrder));
         JsonNode newestPage = service.listModels(mapper.readTree("{\"MaxResults\":2}"), "us-east-1");
         assertEquals(List.of("z", "a"), modelNames(newestPage));
-        JsonNode olderPage = service.listModels(mapper.readTree("{\"MaxResults\":2,\"NextToken\":\"a\"}"), "us-east-1");
+        String creationCursor = newestPage.path("NextToken").asText();
+        JsonNode olderPage = service.listModels(
+                mapper.createObjectNode().put("MaxResults", 2).put("NextToken", creationCursor), "us-east-1");
         assertEquals(List.of("m"), modelNames(olderPage));
         JsonNode oldestFirst = service.listModels(mapper.readTree("{\"SortBy\":\"CreationTime\",\"SortOrder\":\"Ascending\"}"), "us-east-1");
         assertEquals(List.of("m", "a", "z"), modelNames(oldestFirst));
@@ -127,6 +129,69 @@ class SageMakerServiceTest {
         JsonNode secondPage = service.listModels(mapper.readTree("{\"SortBy\":\"Name\",\"SortOrder\":\"Descending\",\"MaxResults\":2,\"NextToken\":\"m\"}"), "us-east-1");
         assertEquals(List.of("a"), modelNames(secondPage));
         assertTrue(secondPage.path("NextToken").isMissingNode());
+
+        models.delete("us-east-1::m");
+        JsonNode afterCursorDeletion = service.listModels(mapper.readTree("{\"SortBy\":\"Name\",\"SortOrder\":\"Descending\",\"MaxResults\":2,\"NextToken\":\"m\"}"), "us-east-1");
+        assertEquals(List.of("a"), modelNames(afterCursorDeletion));
+    }
+
+    @Test
+    void listModelsCreationTimeCursorResumesEqualTimeTiesAfterDeletion() throws Exception {
+        InMemoryStorage<String, ModelResource> models = new InMemoryStorage<>();
+        for (String name : List.of("a", "m", "z")) {
+            ModelResource model = new ModelResource();
+            model.modelName = name;
+            model.creationTime = name.equals("z") ? 3000L : 2000L;
+            models.put("us-east-1::" + name, model);
+        }
+        SageMakerService service = new SageMakerService(models,
+                new InMemoryStorage<String, EndpointConfigResource>(),
+                new InMemoryStorage<String, EndpointResource>(),
+                new InMemoryStorage<String, TrainingJobResource>(),
+                new RegionResolver("us-east-1", "000000000000"), mapper,
+                mock(SageMakerEndpointManager.class), mock(SageMakerTrainingRunner.class));
+
+        JsonNode firstAscending = service.listModels(
+                mapper.createObjectNode().put("MaxResults", 1).put("SortOrder", "Ascending"), "us-east-1");
+        assertEquals(List.of("a"), modelNames(firstAscending));
+        models.delete("us-east-1::a");
+        JsonNode nextAscending = service.listModels(mapper.createObjectNode()
+                .put("MaxResults", 1).put("SortOrder", "Ascending")
+                .put("NextToken", firstAscending.path("NextToken").asText()), "us-east-1");
+        assertEquals(List.of("m"), modelNames(nextAscending));
+
+        JsonNode firstDescending = service.listModels(mapper.createObjectNode().put("MaxResults", 1), "us-east-1");
+        assertEquals(List.of("z"), modelNames(firstDescending));
+        models.delete("us-east-1::z");
+        JsonNode nextDescending = service.listModels(mapper.createObjectNode()
+                .put("MaxResults", 1).put("NextToken", firstDescending.path("NextToken").asText()), "us-east-1");
+        assertEquals(List.of("m"), modelNames(nextDescending));
+    }
+
+    @Test
+    void listModelsCreationTimeCursorRejectsChangedRequestContext() throws Exception {
+        SageMakerService service = service();
+        for (String name : List.of("a", "b")) {
+            service.createModel(mapper.readTree(
+                    "{\"ModelName\":\"" + name + "\",\"PrimaryContainer\":{\"Image\":\"busybox:stable\"}}"), "us-east-1");
+        }
+        JsonNode first = service.listModels(mapper.createObjectNode().put("MaxResults", 1), "us-east-1");
+        String token = first.path("NextToken").asText();
+
+        AwsException changedRegion = assertThrows(AwsException.class, () -> service.listModels(
+                mapper.createObjectNode().put("MaxResults", 1).put("NextToken", token), "us-west-2"));
+        assertEquals("ValidationException", changedRegion.getErrorCode());
+        AwsException changedOrder = assertThrows(AwsException.class, () -> service.listModels(
+                mapper.createObjectNode().put("MaxResults", 1).put("SortOrder", "Ascending")
+                        .put("NextToken", token), "us-east-1"));
+        assertEquals("ValidationException", changedOrder.getErrorCode());
+        AwsException changedFilter = assertThrows(AwsException.class, () -> service.listModels(
+                mapper.createObjectNode().put("MaxResults", 1).put("NameContains", "b")
+                        .put("NextToken", token), "us-east-1"));
+        assertEquals("ValidationException", changedFilter.getErrorCode());
+        AwsException invalidToken = assertThrows(AwsException.class, () -> service.listModels(
+                mapper.createObjectNode().put("NextToken", "invalid%"), "us-east-1"));
+        assertEquals("ValidationException", invalidToken.getErrorCode());
     }
 
     private static List<String> modelNames(JsonNode response) {
@@ -152,6 +217,7 @@ class SageMakerServiceTest {
         JsonNode firstPage = service.listEndpointConfigs(mapper.readTree("{\"MaxResults\":1}"), "us-east-1");
         assertEquals("a", firstPage.path("EndpointConfigs").get(0).path("EndpointConfigName").asText());
         assertEquals("a", firstPage.path("NextToken").asText());
+        configs.delete("us-east-1::a");
         JsonNode secondPage = service.listEndpointConfigs(mapper.readTree("{\"MaxResults\":1,\"NextToken\":\"a\"}"), "us-east-1");
         assertEquals("b", secondPage.path("EndpointConfigs").get(0).path("EndpointConfigName").asText());
         assertTrue(secondPage.path("NextToken").isMissingNode());
