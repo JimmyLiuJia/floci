@@ -40,6 +40,7 @@ import java.util.stream.Collectors;
 public class CodeBuildService {
 
     private static final int LIST_PROJECTS_PAGE_SIZE = 100;
+    private static final int LIST_BUILDS_PAGE_SIZE = 100;
     private static final ObjectMapper PAGE_TOKEN_MAPPER = new ObjectMapper();
 
     // key: region -> name -> project
@@ -674,6 +675,99 @@ public class CodeBuildService {
                 .sorted(comparator)
                 .map(Build::getId)
                 .toList();
+    }
+
+    public BuildPage listBuildsPage(String region, String account, String sortOrder, String nextToken) {
+        return paginateBuilds(region, account, null, sortOrder, nextToken, false);
+    }
+
+    public BuildPage listBuildsForProjectPage(String region, String account, String projectName,
+                                              String sortOrder, String nextToken) {
+        Objects.requireNonNull(projectName);
+        return paginateBuilds(region, account, projectName, sortOrder, nextToken, true);
+    }
+
+    private BuildPage paginateBuilds(String region, String account, String projectName,
+                                     String sortOrder, String nextToken, boolean forProject) {
+        Comparator<Build> comparator = forProject
+                ? Comparator.comparing(Build::getBuildNumber).thenComparing(Build::getId)
+                : Comparator.comparing(Build::getId);
+        if (isDescendingSortOrder(sortOrder, true)) {
+            comparator = comparator.reversed();
+        }
+        List<Build> sorted = buildsFor(account, region).values().stream()
+                .filter(build -> !forProject || projectName.equals(build.getProjectName()))
+                .sorted(comparator)
+                .toList();
+        if (forProject && sortOrder != null && sorted.size() > LIST_BUILDS_PAGE_SIZE) {
+            throw new AwsException("InvalidInputException",
+                    "sortOrder cannot be set when a project has more than 100 builds", 400);
+        }
+
+        String action = forProject ? "ListBuildsForProject" : "ListBuilds";
+        int start = 0;
+        if (nextToken != null) {
+            Build anchor = decodeBuildToken(nextToken, action, region, account, projectName, sortOrder, forProject);
+            while (start < sorted.size() && comparator.compare(sorted.get(start), anchor) <= 0) {
+                start++;
+            }
+        }
+        int end = Math.min(start + LIST_BUILDS_PAGE_SIZE, sorted.size());
+        List<Build> page = sorted.subList(start, end);
+        String continuation = end < sorted.size()
+                ? encodeBuildToken(page.getLast(), action, region, account, projectName, sortOrder, forProject)
+                : null;
+        return new BuildPage(page.stream().map(Build::getId).toList(), continuation);
+    }
+
+    private Build decodeBuildToken(String token, String action, String region, String account,
+                                   String projectName, String sortOrder, boolean forProject) {
+        if (token.isEmpty()) {
+            throw new AwsException("InvalidInputException", "Invalid nextToken", 400);
+        }
+        JsonNode cursor;
+        try {
+            cursor = PAGE_TOKEN_MAPPER.readTree(Base64.getUrlDecoder().decode(token));
+        } catch (IllegalArgumentException | IOException e) {
+            throw new AwsException("InvalidInputException", "Invalid nextToken", 400);
+        }
+        if (cursor == null || !cursor.isObject()
+                || !action.equals(cursor.path("action").asText(null))
+                || !region.equals(cursor.path("region").asText(null))
+                || !account.equals(cursor.path("account").asText(null))
+                || !cursor.has("projectName")
+                || !Objects.equals(projectName, cursor.path("projectName").asText(null))
+                || !cursor.has("sortOrder")
+                || !Objects.equals(sortOrder, cursor.path("sortOrder").asText(null))
+                || !cursor.path("lastId").isTextual() || cursor.path("lastId").asText().isEmpty()
+                || forProject && (!cursor.path("buildNumber").isIntegralNumber()
+                        || !cursor.path("buildNumber").canConvertToLong())) {
+            throw new AwsException("InvalidInputException", "Invalid nextToken", 400);
+        }
+        Build anchor = new Build();
+        anchor.setId(cursor.path("lastId").asText());
+        if (forProject) {
+            anchor.setBuildNumber(cursor.path("buildNumber").longValue());
+        }
+        return anchor;
+    }
+
+    private String encodeBuildToken(Build last, String action, String region, String account,
+                                    String projectName, String sortOrder, boolean forProject) {
+        ObjectNode cursor = PAGE_TOKEN_MAPPER.createObjectNode();
+        cursor.put("action", action);
+        cursor.put("region", region);
+        cursor.put("account", account);
+        cursor.put("projectName", projectName);
+        cursor.put("sortOrder", sortOrder);
+        cursor.put("lastId", last.getId());
+        if (forProject) {
+            cursor.put("buildNumber", last.getBuildNumber());
+        }
+        return Base64Url.encode(cursor.toString());
+    }
+
+    public record BuildPage(List<String> ids, String nextToken) {
     }
 
     private boolean isDescendingSortOrder(String sortOrder, boolean defaultDescending) {
