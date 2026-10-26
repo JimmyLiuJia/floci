@@ -489,6 +489,7 @@ class RamServiceTest {
 
         ResourceShare created = fixedClockService.createResourceShare(
                 "original", List.of(), List.of(), false, "us-east-1", OWNER);
+        assertEquals(created.getCreationTime(), created.getLastUpdatedTime());
         String arn = created.getResourceShareArn();
         ResourceShare firstUpdate = fixedClockService.updateResourceShare(
                 arn, "first", null, OWNER, "us-east-1");
