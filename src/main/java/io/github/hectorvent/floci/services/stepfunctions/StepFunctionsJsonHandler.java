@@ -455,12 +455,12 @@ public class StepFunctionsJsonHandler {
         String stateMachineArn = request.path("stateMachineArn").asText();
         Integer maxResults = parseOptionalInt(request, "maxResults");
         String nextToken = optionalText(request, "nextToken");
-        PaginatedResult<Execution> page = service.listExecutions(
+        PaginatedResult<StepFunctionsService.ExecutionSnapshot> page = service.listExecutions(
                 stateMachineArn, statusFilter, maxResults, nextToken);
         ObjectNode response = objectMapper.createObjectNode();
         ArrayNode array = response.putArray("executions");
-        for (Execution e : page.items()) {
-            String status = e.getStatus();
+        for (StepFunctionsService.ExecutionSnapshot snapshot : page.items()) {
+            Execution e = snapshot.execution();
             ObjectNode item = array.addObject();
             item.put("executionArn", e.getExecutionArn());
             item.put("stateMachineArn", e.getStateMachineArn());
@@ -471,7 +471,7 @@ public class StepFunctionsJsonHandler {
                 item.put("stateMachineAliasArn", e.getStateMachineAliasArn());
             }
             item.put("name", e.getName());
-            item.put("status", status);
+            item.put("status", snapshot.status());
             item.put("startDate", e.getStartDate());
             if (e.getStopDate() != null) item.put("stopDate", e.getStopDate());
         }

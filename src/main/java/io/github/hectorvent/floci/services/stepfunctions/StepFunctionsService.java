@@ -1013,17 +1013,21 @@ public class StepFunctionsService implements Resettable, ResourceProvider {
     }
 
     /** Returns a filtered, newest-first page of executions for the ListExecutions API. */
-    public PaginatedResult<Execution> listExecutions(String stateMachineArn, String statusFilter,
-                                                     Integer maxResults, String nextToken) {
+    public PaginatedResult<ExecutionSnapshot> listExecutions(String stateMachineArn, String statusFilter,
+                                                              Integer maxResults, String nextToken) {
         int pageSize = StepFunctionsPaging.pageSize(maxResults, nextToken);
-        List<Execution> matching = listExecutions(stateMachineArn).stream()
-                .filter(execution -> statusFilter == null || statusFilter.equals(execution.getStatus()))
+        List<ExecutionSnapshot> matching = listExecutions(stateMachineArn).stream()
+                .map(execution -> new ExecutionSnapshot(execution, execution.getStatus()))
+                .filter(snapshot -> statusFilter == null || statusFilter.equals(snapshot.status()))
                 .toList();
         String namespace = "states:executions:" + regionResolver.getAccountId() + ":"
                 + stateMachineArn + ":" + (statusFilter == null ? "*" : statusFilter);
-        return Pagination.paginate(matching, StepFunctionsService::executionPaginationCursor,
+        return Pagination.paginate(matching, snapshot -> executionPaginationCursor(snapshot.execution()),
                 pageSize, nextToken, namespace,
                 token -> new AwsException("InvalidToken", "Invalid nextToken.", 400));
+    }
+
+    public record ExecutionSnapshot(Execution execution, String status) {
     }
 
     /** Sorts newest executions first while keeping equal timestamps deterministic. */

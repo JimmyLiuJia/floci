@@ -33,20 +33,21 @@ class StepFunctionsListExecutionsFilterTest {
     void setUp() {
         service = mock(StepFunctionsService.class);
         handler = new StepFunctionsJsonHandler(service, mapper, Clock.systemUTC());
-        List<Execution> executions = List.of("RUNNING", "SUCCEEDED", "FAILED", "TIMED_OUT", "ABORTED").stream()
+        List<StepFunctionsService.ExecutionSnapshot> executions = List.of(
+                        "RUNNING", "SUCCEEDED", "FAILED", "TIMED_OUT", "ABORTED").stream()
                 .map(status -> {
                     Execution execution = new Execution();
                     execution.setExecutionArn(ARN + ":" + status);
                     execution.setStateMachineArn(ARN);
                     execution.setName(status);
                     execution.setStatus(status);
-                    return execution;
+                    return new StepFunctionsService.ExecutionSnapshot(execution, status);
                 }).toList();
         when(service.listExecutions(eq(ARN), nullable(String.class), nullable(Integer.class), nullable(String.class)))
                 .thenAnswer(invocation -> {
                     String status = invocation.getArgument(1);
-                    List<Execution> page = status == null ? executions : executions.stream()
-                            .filter(execution -> status.equals(execution.getStatus())).toList();
+                    List<StepFunctionsService.ExecutionSnapshot> page = status == null ? executions : executions.stream()
+                            .filter(snapshot -> status.equals(snapshot.status())).toList();
                     return new PaginatedResult<>(page, null);
                 });
     }
@@ -76,9 +77,9 @@ class StepFunctionsListExecutionsFilterTest {
     @Test
     void emittedStatusIsTheSameSnapshotThatMatchedTheFilter() {
         Execution execution = mock(Execution.class);
-        when(execution.getStatus()).thenReturn("RUNNING", "SUCCEEDED");
         when(service.listExecutions(ARN, "RUNNING", null, null)).thenReturn(
-                new PaginatedResult<>(List.of(execution), null));
+                new PaginatedResult<>(List.of(
+                        new StepFunctionsService.ExecutionSnapshot(execution, "RUNNING")), null));
         JsonNode executions = list(request().put("statusFilter", "RUNNING"));
         assertEquals(1, executions.size());
         assertEquals("RUNNING", executions.get(0).path("status").asText());

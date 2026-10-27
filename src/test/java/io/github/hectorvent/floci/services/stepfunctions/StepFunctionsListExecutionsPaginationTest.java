@@ -32,7 +32,8 @@ class StepFunctionsListExecutionsPaginationTest {
 
         Execution newer = execution("newer", 2.0);
         when(service.listExecutions(ARN, null, 1, null)).thenReturn(
-                new PaginatedResult<>(List.of(newer), "continuation"));
+                new PaginatedResult<>(List.of(
+                        new StepFunctionsService.ExecutionSnapshot(newer, "SUCCEEDED")), "continuation"));
     }
 
     @Test

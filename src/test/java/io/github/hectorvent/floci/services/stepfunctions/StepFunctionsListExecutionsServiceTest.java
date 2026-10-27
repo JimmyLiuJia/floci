@@ -1,6 +1,8 @@
 package io.github.hectorvent.floci.services.stepfunctions;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.PaginatedResult;
 import io.github.hectorvent.floci.core.common.RegionResolver;
@@ -14,6 +16,7 @@ import io.github.hectorvent.floci.services.stepfunctions.model.StateMachineAlias
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.time.Clock;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -23,6 +26,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 class StepFunctionsListExecutionsServiceTest {
 
@@ -52,23 +56,29 @@ class StepFunctionsListExecutionsServiceTest {
 
     @Test
     void pagesNewestExecutionsAndResumesFromTheOpaqueToken() {
-        PaginatedResult<Execution> first = service.listExecutions(ARN, null, 1, null);
-        assertEquals(List.of("new"), first.items().stream().map(Execution::getName).toList());
+        PaginatedResult<StepFunctionsService.ExecutionSnapshot> first = service.listExecutions(ARN, null, 1, null);
+        assertEquals(List.of("new"), first.items().stream().map(snapshot -> snapshot.execution().getName()).toList());
         assertNotNull(first.nextToken());
 
-        PaginatedResult<Execution> second = service.listExecutions(ARN, null, 1, first.nextToken());
-        assertEquals(List.of("running"), second.items().stream().map(Execution::getName).toList());
+        PaginatedResult<StepFunctionsService.ExecutionSnapshot> second = service.listExecutions(
+                ARN, null, 1, first.nextToken());
+        assertEquals(List.of("running"), second.items().stream().map(snapshot -> snapshot.execution().getName())
+                .toList());
         assertNotNull(second.nextToken());
     }
 
     @Test
     void appliesStatusFilterBeforePaging() {
-        PaginatedResult<Execution> first = service.listExecutions(ARN, "SUCCEEDED", 1, null);
-        assertEquals(List.of("new"), first.items().stream().map(Execution::getName).toList());
+        PaginatedResult<StepFunctionsService.ExecutionSnapshot> first = service.listExecutions(
+                ARN, "SUCCEEDED", 1, null);
+        assertEquals(List.of("new"), first.items().stream().map(snapshot -> snapshot.execution().getName())
+                .toList());
         assertNotNull(first.nextToken());
 
-        PaginatedResult<Execution> second = service.listExecutions(ARN, "SUCCEEDED", 1, first.nextToken());
-        assertEquals(List.of("old"), second.items().stream().map(Execution::getName).toList());
+        PaginatedResult<StepFunctionsService.ExecutionSnapshot> second = service.listExecutions(
+                ARN, "SUCCEEDED", 1, first.nextToken());
+        assertEquals(List.of("old"), second.items().stream().map(snapshot -> snapshot.execution().getName())
+                .toList());
     }
 
     @Test
@@ -77,6 +87,27 @@ class StepFunctionsListExecutionsServiceTest {
         assertThrows(AwsException.class, () -> service.listExecutions(
                 ARN + "-other", null, 1, token));
         assertThrows(AwsException.class, () -> service.listExecutions(ARN, "SUCCEEDED", 1, token));
+    }
+
+    @Test
+    void responseStatusIsTheSnapshotUsedByTheFilter() {
+        Execution changing = mock(Execution.class);
+        when(changing.getExecutionArn()).thenReturn(ARN + ":changing");
+        when(changing.getStateMachineArn()).thenReturn(ARN);
+        when(changing.getName()).thenReturn("changing");
+        when(changing.getStatus()).thenReturn("RUNNING", "SUCCEEDED");
+        when(changing.getStartDate()).thenReturn(4.0);
+        executionStore.put(ARN + ":changing", changing);
+
+        StepFunctionsJsonHandler handler = new StepFunctionsJsonHandler(service, new ObjectMapper(), Clock.systemUTC());
+        ObjectNode request = new ObjectMapper().createObjectNode()
+                .put("stateMachineArn", ARN)
+                .put("statusFilter", "RUNNING");
+        JsonNode response = (JsonNode) handler.handle("ListExecutions", request, "us-east-1").getEntity();
+
+        JsonNode changingResponse = response.path("executions").get(0);
+        assertEquals("changing", changingResponse.path("name").asText());
+        assertEquals("RUNNING", changingResponse.path("status").asText());
     }
 
     private void put(String name, double startDate, String status) {
