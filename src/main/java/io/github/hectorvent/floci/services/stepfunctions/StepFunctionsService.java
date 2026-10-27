@@ -1012,6 +1012,26 @@ public class StepFunctionsService implements Resettable, ResourceProvider {
         }).orElse(false));
     }
 
+    /** Returns a filtered, newest-first page of executions for the ListExecutions API. */
+    public PaginatedResult<Execution> listExecutions(String stateMachineArn, String statusFilter,
+                                                     Integer maxResults, String nextToken) {
+        int pageSize = StepFunctionsPaging.pageSize(maxResults, nextToken);
+        List<Execution> matching = listExecutions(stateMachineArn).stream()
+                .filter(execution -> statusFilter == null || statusFilter.equals(execution.getStatus()))
+                .toList();
+        String namespace = "states:executions:" + regionResolver.getAccountId() + ":"
+                + stateMachineArn + ":" + (statusFilter == null ? "*" : statusFilter);
+        return Pagination.paginate(matching, StepFunctionsService::executionPaginationCursor,
+                pageSize, nextToken, namespace,
+                token -> new AwsException("InvalidToken", "Invalid nextToken.", 400));
+    }
+
+    /** Sorts newest executions first while keeping equal timestamps deterministic. */
+    private static String executionPaginationCursor(Execution execution) {
+        long startMillis = Math.round(execution.getStartDate() * 1000.0);
+        return String.format("%019d:%s", Long.MAX_VALUE - startMillis, execution.getExecutionArn());
+    }
+
     /**
      * Aborts a running execution. The caller's {@code error} and {@code cause} land on the
      * Execution itself, not only on the history event, so DescribeExecution reports them.

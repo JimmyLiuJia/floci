@@ -452,14 +452,15 @@ public class StepFunctionsJsonHandler {
             throw new AwsException("ValidationException",
                     "PENDING_REDRIVE execution listing is not supported.", 400);
         }
-        List<Execution> list = service.listExecutions(request.path("stateMachineArn").asText());
+        String stateMachineArn = request.path("stateMachineArn").asText();
+        Integer maxResults = parseOptionalInt(request, "maxResults");
+        String nextToken = optionalText(request, "nextToken");
+        PaginatedResult<Execution> page = service.listExecutions(
+                stateMachineArn, statusFilter, maxResults, nextToken);
         ObjectNode response = objectMapper.createObjectNode();
         ArrayNode array = response.putArray("executions");
-        for (Execution e : list) {
+        for (Execution e : page.items()) {
             String status = e.getStatus();
-            if (statusFilter != null && !statusFilter.equals(status)) {
-                continue;
-            }
             ObjectNode item = array.addObject();
             item.put("executionArn", e.getExecutionArn());
             item.put("stateMachineArn", e.getStateMachineArn());
@@ -473,6 +474,9 @@ public class StepFunctionsJsonHandler {
             item.put("status", status);
             item.put("startDate", e.getStartDate());
             if (e.getStopDate() != null) item.put("stopDate", e.getStopDate());
+        }
+        if (page.nextToken() != null) {
+            response.put("nextToken", page.nextToken());
         }
         return Response.ok(response).build();
     }
