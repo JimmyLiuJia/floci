@@ -59,7 +59,6 @@ import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Base64;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -738,51 +737,14 @@ public class LambdaService implements ResourceProvider {
     }
 
     public PaginatedResult<LambdaFunction> listFunctions(String region, String maxItems, String marker) {
-        int pageSize = listFunctionsPageSize(maxItems);
+        List<String> errors = new ArrayList<>();
+        Integer requested = LambdaPagination.parseMaxItems(maxItems, MAX_LIST_FUNCTIONS_ITEMS, errors);
+        if (!errors.isEmpty()) {
+            throw SmithyValidationErrors.validationException(errors);
+        }
         String scope = regionResolver.getAccountId() + "\n" + region + "\n";
-        String after = null;
-        if (marker != null) {
-            String cursor = listFunctionMarkers.cursorOf(marker);
-            if (cursor == null || !cursor.startsWith(scope)) {
-                throw new AwsException("InvalidParameterValueException", "Invalid pagination key.", 400);
-            }
-            after = cursor.substring(scope.length());
-        }
-
-        List<LambdaFunction> functions = listFunctions(region).stream()
-                .sorted(Comparator.comparing(LambdaFunction::getFunctionName))
-                .toList();
-        int start = 0;
-        while (start < functions.size() && after != null
-                && functions.get(start).getFunctionName().compareTo(after) <= 0) {
-            start++;
-        }
-        int end = Math.min(start + pageSize, functions.size());
-        List<LambdaFunction> page = functions.subList(start, end);
-        String nextMarker = end < functions.size()
-                ? listFunctionMarkers.issue(scope + page.getLast().getFunctionName()) : null;
-        return new PaginatedResult<>(page, nextMarker);
-    }
-
-    private static int listFunctionsPageSize(String maxItems) {
-        if (maxItems == null || maxItems.isEmpty()) {
-            return LIST_FUNCTIONS_PAGE_SIZE;
-        }
-        int requested;
-        try {
-            requested = Integer.parseInt(maxItems);
-        } catch (NumberFormatException e) {
-            throw new AwsException("SerializationException",
-                    "'" + maxItems + "' can not be converted to Integer", 400);
-        }
-        if (requested < 1 || requested > MAX_LIST_FUNCTIONS_ITEMS) {
-            String bound = requested < 1 ? "greater than or equal to 1"
-                    : "less than or equal to " + MAX_LIST_FUNCTIONS_ITEMS;
-            throw SmithyValidationErrors.validationException(List.of(
-                    "Value '" + maxItems + "' at 'maxItems' failed to satisfy constraint: Member must have value "
-                            + bound));
-        }
-        return Math.min(requested, LIST_FUNCTIONS_PAGE_SIZE);
+        return LambdaPagination.paginate(listFunctions(region), LambdaFunction::getFunctionName,
+                requested, LIST_FUNCTIONS_PAGE_SIZE, marker, listFunctionMarkers, scope);
     }
 
     public LambdaFunction updateFunctionCode(String region, String functionName, Map<String, Object> request) {

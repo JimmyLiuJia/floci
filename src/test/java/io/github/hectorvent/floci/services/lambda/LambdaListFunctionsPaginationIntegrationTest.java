@@ -95,6 +95,14 @@ class LambdaListFunctionsPaginationIntegrationTest {
         }
     }
 
+    @Test
+    void listFunctionsReportsSerializationFailureBeforeMarkerValidation() {
+        lambdaRequest().queryParam("MaxItems", "abc").queryParam("Marker", "not-an-issued-marker")
+                .get("/2015-03-31/functions").then().statusCode(400)
+                .body("__type", equalTo("SerializationException"))
+                .body("message", equalTo("'abc' can not be converted to Integer"));
+    }
+
     private static RequestSpecification lambdaRequest() {
         return given().header("Authorization", AUTHORIZATION);
     }
