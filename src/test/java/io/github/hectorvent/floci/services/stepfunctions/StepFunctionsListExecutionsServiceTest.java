@@ -21,11 +21,13 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.when;
 
 class StepFunctionsListExecutionsServiceTest {
@@ -39,7 +41,7 @@ class StepFunctionsListExecutionsServiceTest {
     @BeforeEach
     void setUp() {
         StorageFactory factory = mock(StorageFactory.class);
-        executionStore = AccountAwareStorageBackend.inMemory(ACCOUNT);
+        executionStore = spy(AccountAwareStorageBackend.inMemory(ACCOUNT));
         doReturn(AccountAwareStorageBackend.<StateMachine>inMemory(ACCOUNT))
                 .doReturn(executionStore)
                 .doReturn(AccountAwareStorageBackend.<Activity>inMemory(ACCOUNT))
@@ -108,6 +110,44 @@ class StepFunctionsListExecutionsServiceTest {
         JsonNode changingResponse = response.path("executions").get(0);
         assertEquals("changing", changingResponse.path("name").asText());
         assertEquals("RUNNING", changingResponse.path("status").asText());
+    }
+
+    @Test
+    void ordersTerminalExecutionsByStopDateAndResumesStableCursors() {
+        String orderedArn = "arn:aws:states:us-east-1:" + ACCOUNT + ":stateMachine:ordered";
+        Execution terminalA = execution(orderedArn, "terminal-a", 3.0, 5.0);
+        Execution terminalB = execution(orderedArn, "terminal-b", 1.0, 5.0);
+        Execution terminalC = execution(orderedArn, "terminal-c", 9.0, 4.0);
+        executionStore.put(terminalA.getExecutionArn(), terminalA);
+        executionStore.put(terminalB.getExecutionArn(), terminalB);
+        executionStore.put(terminalC.getExecutionArn(), terminalC);
+        doReturn(List.of(terminalB, terminalA, terminalC)).when(executionStore).scan(any());
+
+        PaginatedResult<StepFunctionsService.ExecutionSnapshot> first = service.listExecutions(
+                orderedArn, null, 1, null);
+        assertEquals("terminal-a", first.items().get(0).execution().getName());
+        assertNotNull(first.nextToken());
+
+        PaginatedResult<StepFunctionsService.ExecutionSnapshot> second = service.listExecutions(
+                orderedArn, null, 1, first.nextToken());
+        assertEquals("terminal-b", second.items().get(0).execution().getName());
+        assertNotNull(second.nextToken());
+
+        PaginatedResult<StepFunctionsService.ExecutionSnapshot> third = service.listExecutions(
+                orderedArn, null, 1, second.nextToken());
+        assertEquals("terminal-c", third.items().get(0).execution().getName());
+        assertNull(third.nextToken());
+    }
+
+    private Execution execution(String stateMachineArn, String name, double startDate, double stopDate) {
+        Execution execution = new Execution();
+        execution.setExecutionArn(stateMachineArn + ":execution:" + name);
+        execution.setStateMachineArn(stateMachineArn);
+        execution.setName(name);
+        execution.setStatus("SUCCEEDED");
+        execution.setStartDate(startDate);
+        execution.setStopDate(stopDate);
+        return execution;
     }
 
     private void put(String name, double startDate, String status) {

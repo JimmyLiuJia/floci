@@ -1022,7 +1022,7 @@ public class StepFunctionsService implements Resettable, ResourceProvider {
                 .toList();
         String namespace = "states:executions:" + regionResolver.getAccountId() + ":"
                 + stateMachineArn + ":" + (statusFilter == null ? "*" : statusFilter);
-        return Pagination.paginate(matching, snapshot -> executionPaginationCursor(snapshot.execution()),
+        return Pagination.paginate(matching, StepFunctionsService::executionPaginationCursor,
                 pageSize, nextToken, namespace,
                 token -> new AwsException("InvalidToken", "Invalid nextToken.", 400));
     }
@@ -1031,9 +1031,13 @@ public class StepFunctionsService implements Resettable, ResourceProvider {
     }
 
     /** Sorts newest executions first while keeping equal timestamps deterministic. */
-    private static String executionPaginationCursor(Execution execution) {
-        long startMillis = Math.round(execution.getStartDate() * 1000.0);
-        return String.format("%019d:%s", Long.MAX_VALUE - startMillis, execution.getExecutionArn());
+    private static String executionPaginationCursor(ExecutionSnapshot snapshot) {
+        Execution execution = snapshot.execution();
+        Double stopDate = execution.getStopDate();
+        double sortDate = "RUNNING".equals(snapshot.status()) || stopDate == null
+                ? execution.getStartDate() : stopDate;
+        long sortMillis = Math.round(sortDate * 1000.0);
+        return String.format("%019d:%s", Long.MAX_VALUE - sortMillis, execution.getExecutionArn());
     }
 
     /**
