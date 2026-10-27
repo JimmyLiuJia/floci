@@ -321,6 +321,21 @@ class SageMakerListSortServiceTest {
         assertEquals("ValidationException", invalidOrder.getErrorCode());
     }
 
+    @Test
+    void listOperationsReportBothInvalidSortValues() throws Exception {
+        SageMakerService service = service(new InMemoryStorage<>(), new InMemoryStorage<>(), new InMemoryStorage<>());
+        JsonNode request = mapper.readTree("{\"SortBy\":\"BadBy\",\"SortOrder\":\"BadOrder\"}");
+        String sortByError = "Value 'BadBy' at 'sortBy' failed to satisfy constraint: "
+                + "Member must satisfy enum value set: [Name, CreationTime]";
+        String sortOrderError = "Value 'BadOrder' at 'sortOrder' failed to satisfy constraint: "
+                + "Member must satisfy enum value set: [Ascending, Descending]";
+
+        AwsException error = assertThrows(AwsException.class, () -> service.listModels(request, REGION));
+        assertEquals("ValidationException", error.getErrorCode());
+        assertEquals("2 validation errors detected: " + sortByError + "; " + sortOrderError,
+                error.getMessage());
+    }
+
     private SageMakerService service(InMemoryStorage<String, EndpointConfigResource> configs,
                                      InMemoryStorage<String, EndpointResource> endpoints,
                                      InMemoryStorage<String, TrainingJobResource> jobs) {

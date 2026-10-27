@@ -143,33 +143,24 @@ public class SageMakerService {
     }
 
     public ObjectNode listModels(JsonNode request, String region) {
-        String sortBy = text(request, "SortBy");
-        String sortOrder = text(request, "SortOrder");
-        List<String> violations = new ArrayList<>();
-        if (sortBy != null && !sortBy.equals("Name") && !sortBy.equals("CreationTime")) {
-            violations.add(SmithyValidationErrors.notInEnum(sortBy, "sortBy", List.of("Name", "CreationTime")));
-        }
-        if (sortOrder != null && !sortOrder.equals("Ascending") && !sortOrder.equals("Descending")) {
-            violations.add(SmithyValidationErrors.notInEnum(sortOrder, "sortOrder", List.of("Ascending", "Descending")));
-        }
-        if (!violations.isEmpty()) {
-            throw SmithyValidationErrors.validationException(violations);
-        }
-        Comparator<ModelResource> comparator = "Name".equals(sortBy)
-                ? Comparator.comparing(m -> m.modelName)
-                : Comparator.comparingLong((ModelResource m) -> m.creationTime).thenComparing(m -> m.modelName);
-        if (sortOrder == null || sortOrder.equals("Descending")) {
-            comparator = comparator.reversed();
-        }
+        SortOptions sort = sortOptions(request, "CreationTime", "Descending", "Name", "CreationTime");
+        String sortBy = sort.sortBy();
+        String sortOrder = sort.sortOrder();
+        Comparator<ModelResource> comparator = modelComparator(sortBy, sortOrder);
         List<ModelResource> models = modelStore.scan(k -> k.startsWith(region + "::")).stream().sorted(comparator).toList();
         String nameContains = text(request, "NameContains");
         if (nameContains != null && !nameContains.isBlank()) {
             models = models.stream().filter(m -> m.modelName.contains(nameContains)).toList();
         }
-        return paginateModels(models, request, comparator, region,
-                sortBy == null ? "CreationTime" : sortBy,
-                sortOrder == null ? "Descending" : sortOrder,
-                nameContains == null || nameContains.isBlank() ? "" : nameContains);
+        return paginate(models, request, sortBy, sortOrder,
+                new CursorScope("ListModels", region,
+                        nameContains == null || nameContains.isBlank() ? "" : nameContains, ""),
+                m -> modelCursor(m, sortBy, sortOrder),
+                m -> modelAnchor(m, sortBy), comparator, (m, n) -> {
+            n.put("ModelName", m.modelName);
+            n.put("ModelArn", m.modelArn);
+            n.put("CreationTime", epoch(m.creationTime));
+        }, "Models");
     }
 
     public synchronized ObjectNode createEndpointConfig(JsonNode request, String region) {
@@ -684,6 +675,36 @@ public class SageMakerService {
         return selected;
     }
 
+    private static SortOptions sortOptions(JsonNode request, String defaultSortBy, String defaultSortOrder,
+                                           String... allowed) {
+        String sortBy = text(request, "SortBy");
+        String sortOrder = text(request, "SortOrder");
+        sortBy = sortBy == null ? defaultSortBy : sortBy;
+        sortOrder = sortOrder == null ? defaultSortOrder : sortOrder;
+        List<String> violations = new ArrayList<>();
+        if (!List.of(allowed).contains(sortBy)) {
+            violations.add(SmithyValidationErrors.notInEnum(sortBy, "sortBy", List.of(allowed)));
+        }
+        if (!sortOrder.equals("Ascending") && !sortOrder.equals("Descending")) {
+            violations.add(SmithyValidationErrors.notInEnum(sortOrder, "sortOrder",
+                    List.of("Ascending", "Descending")));
+        }
+        if (!violations.isEmpty()) {
+            throw SmithyValidationErrors.validationException(violations);
+        }
+        return new SortOptions(sortBy, sortOrder);
+    }
+
+    private record SortOptions(String sortBy, String sortOrder) {
+    }
+
+    private static Comparator<ModelResource> modelComparator(String sortBy, String sortOrder) {
+        Comparator<ModelResource> comparator = "Name".equals(sortBy)
+                ? Comparator.comparing(m -> m.modelName)
+                : Comparator.comparingLong((ModelResource m) -> m.creationTime).thenComparing(m -> m.modelName);
+        return "Descending".equals(sortOrder) ? comparator.reversed() : comparator;
+    }
+
     private static Comparator<EndpointConfigResource> endpointConfigComparator(String sortBy, String sortOrder) {
         Comparator<EndpointConfigResource> comparator = switch (sortBy) {
             case "Name" -> Comparator.comparing(c -> c.endpointConfigName);
@@ -793,6 +814,20 @@ public class SageMakerService {
         return anchor;
     }
 
+    private static SortCursor modelCursor(ModelResource model, String sortBy, String sortOrder) {
+        String value = "Name".equals(sortBy) ? model.modelName : Long.toString(model.creationTime);
+        return new SortCursor(sortBy, sortOrder, value, model.modelName);
+    }
+
+    private static ModelResource modelAnchor(SortCursor cursor, String sortBy) {
+        ModelResource anchor = new ModelResource();
+        anchor.modelName = cursor.name();
+        if ("CreationTime".equals(sortBy)) {
+            anchor.creationTime = parseCursorTime(cursor.value());
+        }
+        return anchor;
+    }
+
     private static long parseCursorTime(String value) {
         try {
             return Long.parseLong(value);
@@ -846,66 +881,6 @@ public class SageMakerService {
     }
 
     private record CursorScope(String operation, String region, String nameContains, String statusEquals) {
-    }
-
-    private ObjectNode paginateModels(List<ModelResource> sorted, JsonNode request,
-                                      Comparator<ModelResource> comparator, String region,
-                                      String sortBy, String sortOrder, String nameContains) {
-        int max = maxResults(request);
-        String nextToken = text(request, "NextToken");
-        List<ModelResource> remaining = sorted;
-        if (nextToken != null && !nextToken.isBlank()) {
-            ModelResource anchor;
-            if (sortBy.equals("Name")) {
-                anchor = new ModelResource();
-                anchor.modelName = nextToken;
-            } else {
-                anchor = decodeModelCursor(nextToken, region, sortOrder, nameContains);
-            }
-            remaining = remaining.stream().dropWhile(m -> comparator.compare(m, anchor) <= 0).toList();
-        }
-        return page(remaining, max, (m, n) -> {
-            n.put("ModelName", m.modelName);
-            n.put("ModelArn", m.modelArn);
-            n.put("CreationTime", epoch(m.creationTime));
-        }, "Models", m -> sortBy.equals("Name") ? m.modelName
-                : encodeModelCursor(m, region, sortOrder, nameContains));
-    }
-
-    private String encodeModelCursor(ModelResource model, String region, String sortOrder, String nameContains) {
-        ObjectNode cursor = mapper.createObjectNode();
-        cursor.put("version", 1);
-        cursor.put("region", region);
-        cursor.put("sortBy", "CreationTime");
-        cursor.put("sortOrder", sortOrder);
-        cursor.put("nameContains", nameContains);
-        cursor.put("creationTime", model.creationTime);
-        cursor.put("modelName", model.modelName);
-        return Base64Url.encode(cursor.toString());
-    }
-
-    private ModelResource decodeModelCursor(String token, String region, String sortOrder, String nameContains) {
-        JsonNode cursor;
-        try {
-            cursor = mapper.readTree(Base64Url.decode(token));
-        } catch (IllegalArgumentException | JsonProcessingException e) {
-            throw validation("Invalid NextToken.");
-        }
-        if (cursor == null || !cursor.path("version").isInt() || cursor.path("version").asInt() != 1
-                || !region.equals(cursor.path("region").asText(null))
-                || !"CreationTime".equals(cursor.path("sortBy").asText(null))
-                || !sortOrder.equals(cursor.path("sortOrder").asText(null))
-                || !nameContains.equals(cursor.path("nameContains").asText(null))
-                || !cursor.path("creationTime").isIntegralNumber()
-                || !cursor.path("creationTime").canConvertToLong()
-                || !cursor.path("modelName").isTextual()
-                || cursor.path("modelName").asText().isBlank()) {
-            throw validation("Invalid NextToken.");
-        }
-        ModelResource anchor = new ModelResource();
-        anchor.creationTime = cursor.path("creationTime").asLong();
-        anchor.modelName = cursor.path("modelName").asText();
-        return anchor;
     }
 
     private <T> ObjectNode page(List<T> remaining, int max, BiConsumer<T, ObjectNode> render,
