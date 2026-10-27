@@ -178,6 +178,19 @@ class StepFunctionsListExecutionsServiceTest {
     }
 
     @Test
+    void listExecutionsAcceptsTokensUpToThreeThousandNinetySixCharacters() {
+        for (int length : List.of(1025, 3096)) {
+            AwsException error = assertThrows(AwsException.class,
+                    () -> service.listExecutions(ARN, null, 1, "x".repeat(length)));
+            assertEquals("InvalidToken", error.getErrorCode());
+        }
+
+        AwsException tooLong = assertThrows(AwsException.class,
+                () -> service.listExecutions(ARN, null, 1, "x".repeat(3097)));
+        assertEquals("ValidationException", tooLong.getErrorCode());
+    }
+
+    @Test
     void appliesStatusFilterBeforePaging() {
         PaginatedResult<StepFunctionsService.ExecutionSnapshot> first = service.listExecutions(
                 ARN, "SUCCEEDED", 1, null);

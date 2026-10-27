@@ -229,33 +229,12 @@ public final class Pagination {
         }
         String issuedAndCursor = decoded.substring(prefix.length());
         int separator = issuedAndCursor.indexOf(':');
-        if (separator <= 0 || separator == issuedAndCursor.length() - 1) {
-            throw invalidToken.apply(token);
-        }
-        String issuedText = issuedAndCursor.substring(0, separator);
-        if (!isDecimal(issuedText)) {
-            throw invalidToken.apply(token);
-        }
-        long issuedMillis;
-        try {
-            issuedMillis = Long.parseLong(issuedText);
-        } catch (NumberFormatException e) {
-            throw invalidToken.apply(token);
-        }
-        long ageMillis;
-        try {
-            ageMillis = Math.subtractExact(nowMillis, issuedMillis);
-        } catch (ArithmeticException e) {
-            throw invalidToken.apply(token);
-        }
+        long issuedMillis = Long.parseLong(issuedAndCursor.substring(0, separator));
+        long ageMillis = nowMillis - issuedMillis;
         if (issuedMillis > nowMillis || ageMillis > lifetimeMillis) {
             throw invalidToken.apply(token);
         }
         return issuedAndCursor.substring(separator + 1);
-    }
-
-    private static boolean isDecimal(String value) {
-        return value.chars().allMatch(character -> character >= '0' && character <= '9');
     }
 
     private static String decodeToken(String token) {

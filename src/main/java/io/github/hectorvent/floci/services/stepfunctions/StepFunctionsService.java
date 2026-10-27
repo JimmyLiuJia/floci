@@ -56,6 +56,7 @@ import java.util.regex.Pattern;
 
 @ApplicationScoped
 public class StepFunctionsService implements Resettable, ResourceProvider {
+    private static final int LIST_EXECUTIONS_MAX_TOKEN_LENGTH = 3096;
 
     private static final Logger LOG = Logger.getLogger(StepFunctionsService.class);
     private static final int HISTORY_PERSIST_CHECKPOINT = 100;
@@ -1033,7 +1034,7 @@ public class StepFunctionsService implements Resettable, ResourceProvider {
     /** Returns a filtered, newest-first page of executions for the ListExecutions API. */
     public PaginatedResult<ExecutionSnapshot> listExecutions(String stateMachineArn, String statusFilter,
                                                               Integer maxResults, String nextToken) {
-        int pageSize = StepFunctionsPaging.pageSize(maxResults, nextToken);
+        int pageSize = StepFunctionsPaging.pageSize(maxResults, nextToken, LIST_EXECUTIONS_MAX_TOKEN_LENGTH);
         List<ExecutionSnapshot> matching = listExecutions(stateMachineArn).stream()
                 .map(execution -> new ExecutionSnapshot(execution, execution.getStatus()))
                 .filter(snapshot -> statusFilter == null || statusFilter.equals(snapshot.status()))
