@@ -3,11 +3,11 @@ package io.github.hectorvent.floci.services.stepfunctions;
 import io.github.hectorvent.floci.core.common.AwsException;
 
 /**
- * The page requests ListActivities, GetExecutionHistory, and ListExecutions check: a
- * {@code maxResults} of 0 to 1000, where 0 or none means 100. ListActivities and
- * GetExecutionHistory accept a {@code nextToken} of 1 to 1024 characters; ListExecutions accepts
- * up to 3096 characters. Callers read both fields before calling it, so a wrongly typed field is
- * reported before either bound.
+ * The page requests ListActivities, ListStateMachines, GetExecutionHistory, and ListExecutions
+ * check a {@code maxResults} of 0 to 1000, where 0 or none means 100. ListActivities,
+ * ListStateMachines, and GetExecutionHistory accept a {@code nextToken} of 1 to 1024 characters;
+ * ListExecutions accepts up to 3096 characters. Callers read both fields before calling it, so a
+ * wrongly typed field is reported before either bound.
  */
 final class StepFunctionsPaging {
 
