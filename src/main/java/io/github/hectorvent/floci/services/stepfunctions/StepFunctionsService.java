@@ -9,6 +9,8 @@ import io.github.hectorvent.floci.core.common.AwsArnShapes;
 import io.github.hectorvent.floci.core.common.AwsArnUtils;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.AwsRegions;
+import io.github.hectorvent.floci.core.common.Base64Url;
+import io.github.hectorvent.floci.core.common.Digests;
 import io.github.hectorvent.floci.core.common.PaginatedResult;
 import io.github.hectorvent.floci.core.common.Pagination;
 import io.github.hectorvent.floci.core.common.RegionResolver;
@@ -35,6 +37,7 @@ import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -1035,8 +1038,10 @@ public class StepFunctionsService implements Resettable, ResourceProvider {
                 .map(execution -> new ExecutionSnapshot(execution, execution.getStatus()))
                 .filter(snapshot -> statusFilter == null || statusFilter.equals(snapshot.status()))
                 .toList();
-        String namespace = "states:executions:" + regionResolver.getAccountId() + ":"
-                + stateMachineArn + ":" + (statusFilter == null ? "*" : statusFilter);
+        String scope = "states:executions:" + regionResolver.getAccountId() + ":" + stateMachineArn + ":"
+                + (statusFilter == null ? "*" : statusFilter);
+        String namespace = "states:executions:" + Base64Url.encode(
+                Digests.sha256(scope.getBytes(StandardCharsets.UTF_8)));
         return Pagination.paginateExpiring(matching, StepFunctionsService::executionPaginationCursor,
                 pageSize, nextToken, namespace, clock, LIST_EXECUTIONS_TOKEN_LIFETIME, listExecutionTokens,
                 token -> new AwsException("InvalidToken", "Invalid nextToken.", 400));

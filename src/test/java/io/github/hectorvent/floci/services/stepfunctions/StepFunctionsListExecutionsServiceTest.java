@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.Base64Url;
+import io.github.hectorvent.floci.core.common.Digests;
 import io.github.hectorvent.floci.core.common.PaginatedResult;
 import io.github.hectorvent.floci.core.common.RegionResolver;
 import io.github.hectorvent.floci.core.storage.AccountAwareStorageBackend;
@@ -17,6 +18,7 @@ import io.github.hectorvent.floci.services.stepfunctions.model.StateMachineAlias
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -82,9 +84,13 @@ class StepFunctionsListExecutionsServiceTest {
     void continuationTokenCarriesItsIssueTimeForExpiryValidation() {
         String token = service.listExecutions(ARN, null, 1, null).nextToken();
 
-        String scope = "states:executions:" + ACCOUNT + ":" + ARN + ":*:";
         String payload = Base64Url.decode(token);
-        assertTrue(payload.substring(scope.length()).matches("\\d+:\\d{19}:.*"), payload);
+        String scope = "states:executions:" + ACCOUNT + ":" + ARN + ":*";
+        String namespace = "states:executions:" + Base64Url.encode(
+                Digests.sha256(scope.getBytes(StandardCharsets.UTF_8)));
+        assertTrue(payload.startsWith(namespace + ":"), payload);
+        assertTrue(payload.substring(namespace.length() + 1)
+                .matches("\\d+:\\d{19}:.*\\.[A-Za-z0-9_-]{43}"), payload);
     }
 
     @Test
@@ -104,14 +110,37 @@ class StepFunctionsListExecutionsServiceTest {
     }
 
     @Test
+    void longUnicodeNamesStillProduceAUsableTokenWithinTheAwsLengthLimit() {
+        String stateMachineName = "界".repeat(80);
+        String longArn = "arn:aws:states:us-east-1:" + ACCOUNT + ":stateMachine:" + stateMachineName;
+        Execution later = execution(longArn, "a".repeat(80), 1.0, 2.0);
+        Execution earlier = execution(longArn, "z".repeat(80), 1.0, 1.0);
+        executionStore.put(later.getExecutionArn(), later);
+        executionStore.put(earlier.getExecutionArn(), earlier);
+
+        PaginatedResult<StepFunctionsService.ExecutionSnapshot> first = service.listExecutions(
+                longArn, null, 1, null);
+        assertNotNull(first.nextToken());
+        assertTrue(first.nextToken().length() <= 1024,
+                "returned token length was " + first.nextToken().length());
+
+        PaginatedResult<StepFunctionsService.ExecutionSnapshot> second = service.listExecutions(
+                longArn, null, 1, first.nextToken());
+        assertEquals(List.of("z".repeat(80)), second.items().stream()
+                .map(snapshot -> snapshot.execution().getName()).toList());
+    }
+
+    @Test
     void changingAnExpiredTokensIssueTimeDoesNotExtendItsLifetime() {
         String token = service.listExecutions(ARN, null, 1, null).nextToken();
-        String scope = "states:executions:" + ACCOUNT + ":" + ARN + ":*:";
         String payload = Base64Url.decode(token);
+        String scope = "states:executions:" + ACCOUNT + ":" + ARN + ":*";
+        String namespace = "states:executions:" + Base64Url.encode(
+                Digests.sha256(scope.getBytes(StandardCharsets.UTF_8)));
 
         clock.advance(Duration.ofHours(24).plusMillis(1));
-        int issueTimeEnd = payload.indexOf(':', scope.length());
-        String edited = Base64Url.encode(scope + clock.millis() + payload.substring(issueTimeEnd));
+        int issueTimeEnd = payload.indexOf(':', namespace.length() + 1);
+        String edited = Base64Url.encode(namespace + ":" + clock.millis() + payload.substring(issueTimeEnd));
 
         AwsException error = assertThrows(AwsException.class,
                 () -> service.listExecutions(ARN, null, 1, edited));
@@ -121,14 +150,10 @@ class StepFunctionsListExecutionsServiceTest {
     @Test
     void changingATokensScopeCannotAuthorizeAnotherStateMachine() {
         String token = service.listExecutions(ARN, null, 1, null).nextToken();
-        String scope = "states:executions:" + ACCOUNT + ":" + ARN + ":*:";
         String otherArn = ARN + "-other";
-        String alteredScope = "states:executions:" + ACCOUNT + ":" + otherArn + ":*:";
-        String payload = Base64Url.decode(token);
-        String edited = Base64Url.encode(alteredScope + payload.substring(scope.length()));
 
         AwsException error = assertThrows(AwsException.class,
-                () -> service.listExecutions(otherArn, null, 1, edited));
+                () -> service.listExecutions(otherArn, null, 1, token));
         assertEquals("InvalidToken", error.getErrorCode());
     }
 
