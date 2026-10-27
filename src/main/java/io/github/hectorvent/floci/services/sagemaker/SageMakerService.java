@@ -320,6 +320,7 @@ public class SageMakerService {
         String sortOrder = sortOrder(request, "Descending");
         Comparator<EndpointResource> comparator = endpointComparator(sortBy, sortOrder);
         List<EndpointResource> endpoints = endpointStore.scan(k -> k.startsWith(region + "::")).stream()
+                .map(SageMakerService::endpointListSnapshot)
                 .sorted(comparator).toList();
         return paginate(endpoints, request, sortBy, sortOrder,
                 new CursorScope("ListEndpoints", region, "", ""),
@@ -410,6 +411,7 @@ public class SageMakerService {
         String sortOrder = sortOrder(request, "Ascending");
         Comparator<TrainingJobResource> comparator = trainingJobComparator(sortBy, sortOrder);
         List<TrainingJobResource> jobs = trainingJobStore.scan(k -> k.startsWith(region + "::")).stream()
+                .map(SageMakerService::trainingJobListSnapshot)
                 .sorted(comparator).toList();
         String nameContains = text(request, "NameContains");
         if (nameContains != null && !nameContains.isBlank()) {
@@ -690,6 +692,25 @@ public class SageMakerService {
             default -> throw new IllegalStateException("Unexpected endpoint config sort key: " + sortBy);
         };
         return "Descending".equals(sortOrder) ? comparator.reversed() : comparator;
+    }
+
+    private static EndpointResource endpointListSnapshot(EndpointResource endpoint) {
+        EndpointResource snapshot = new EndpointResource();
+        snapshot.endpointName = endpoint.endpointName;
+        snapshot.endpointArn = endpoint.endpointArn;
+        snapshot.endpointStatus = endpoint.endpointStatus;
+        snapshot.creationTime = endpoint.creationTime;
+        snapshot.lastModifiedTime = endpoint.lastModifiedTime;
+        return snapshot;
+    }
+
+    private static TrainingJobResource trainingJobListSnapshot(TrainingJobResource job) {
+        TrainingJobResource snapshot = new TrainingJobResource();
+        snapshot.trainingJobName = job.trainingJobName;
+        snapshot.trainingJobArn = job.trainingJobArn;
+        snapshot.trainingJobStatus = job.trainingJobStatus;
+        snapshot.creationTime = job.creationTime;
+        return snapshot;
     }
 
     private static Comparator<EndpointResource> endpointComparator(String sortBy, String sortOrder) {

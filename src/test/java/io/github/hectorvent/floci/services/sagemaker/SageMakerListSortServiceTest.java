@@ -2,6 +2,7 @@ package io.github.hectorvent.floci.services.sagemaker;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.RegionResolver;
 import io.github.hectorvent.floci.core.storage.InMemoryStorage;
@@ -18,7 +19,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.mock;
 
-class SageMakerListSortReproTest {
+class SageMakerListSortServiceTest {
     private static final String REGION = "us-east-1";
 
     private final ObjectMapper mapper = new ObjectMapper();
@@ -118,6 +119,52 @@ class SageMakerListSortReproTest {
                 names(service.listEndpoints(request, REGION), "Endpoints", "EndpointName"));
         assertEquals(List.of("z-job", "a-job"),
                 names(service.listTrainingJobs(request, REGION), "TrainingJobSummaries", "TrainingJobName"));
+    }
+
+    @Test
+    void listTrainingJobsUsesSortedStatusForCursorWhenJobChangesBeforeRendering() throws Exception {
+        InMemoryStorage<String, TrainingJobResource> jobs = new InMemoryStorage<>();
+        TrainingJobResource first = trainingJob("b-job");
+        first.trainingJobStatus = "InProgress";
+        TrainingJobResource second = trainingJob("a-job");
+        second.trainingJobStatus = "InProgress";
+        jobs.put(REGION + "::b-job", first);
+        jobs.put(REGION + "::a-job", second);
+        SageMakerService service = service(new InMemoryStorage<>(), new InMemoryStorage<>(), jobs,
+                mapperMutatingBeforeRender(() -> first.trainingJobStatus = "Completed"));
+        ObjectNode request = mapper.createObjectNode()
+                .put("SortBy", "Status").put("SortOrder", "Descending").put("MaxResults", 1);
+
+        JsonNode firstPage = service.listTrainingJobs(request, REGION);
+        assertEquals(List.of("b-job"), names(firstPage, "TrainingJobSummaries", "TrainingJobName"));
+        assertEquals("InProgress", firstPage.path("TrainingJobSummaries").get(0).path("TrainingJobStatus").asText());
+        assertEquals("Completed", first.trainingJobStatus);
+
+        JsonNode secondPage = service.listTrainingJobs(request.deepCopy()
+                .put("NextToken", firstPage.path("NextToken").asText()), REGION);
+        assertEquals(List.of("a-job"), names(secondPage, "TrainingJobSummaries", "TrainingJobName"));
+    }
+
+    @Test
+    void listEndpointsUsesSortedStatusForCursorWhenEndpointChangesBeforeRendering() throws Exception {
+        InMemoryStorage<String, EndpointResource> endpoints = new InMemoryStorage<>();
+        EndpointResource first = endpoint("b-endpoint");
+        EndpointResource second = endpoint("a-endpoint");
+        endpoints.put(REGION + "::b-endpoint", first);
+        endpoints.put(REGION + "::a-endpoint", second);
+        SageMakerService service = service(new InMemoryStorage<>(), endpoints, new InMemoryStorage<>(),
+                mapperMutatingBeforeRender(() -> first.endpointStatus = "Creating"));
+        ObjectNode request = mapper.createObjectNode()
+                .put("SortBy", "Status").put("SortOrder", "Descending").put("MaxResults", 1);
+
+        JsonNode firstPage = service.listEndpoints(request, REGION);
+        assertEquals(List.of("b-endpoint"), names(firstPage, "Endpoints", "EndpointName"));
+        assertEquals("InService", firstPage.path("Endpoints").get(0).path("EndpointStatus").asText());
+        assertEquals("Creating", first.endpointStatus);
+
+        JsonNode secondPage = service.listEndpoints(request.deepCopy()
+                .put("NextToken", firstPage.path("NextToken").asText()), REGION);
+        assertEquals(List.of("a-endpoint"), names(secondPage, "Endpoints", "EndpointName"));
     }
 
     @Test
@@ -277,9 +324,31 @@ class SageMakerListSortReproTest {
     private SageMakerService service(InMemoryStorage<String, EndpointConfigResource> configs,
                                      InMemoryStorage<String, EndpointResource> endpoints,
                                      InMemoryStorage<String, TrainingJobResource> jobs) {
+        return service(configs, endpoints, jobs, mapper);
+    }
+
+    private SageMakerService service(InMemoryStorage<String, EndpointConfigResource> configs,
+                                     InMemoryStorage<String, EndpointResource> endpoints,
+                                     InMemoryStorage<String, TrainingJobResource> jobs,
+                                     ObjectMapper serviceMapper) {
         return new SageMakerService(new InMemoryStorage<String, ModelResource>(), configs, endpoints, jobs,
-                new RegionResolver(REGION, "000000000000"), mapper,
+                new RegionResolver(REGION, "000000000000"), serviceMapper,
                 mock(SageMakerEndpointManager.class), mock(SageMakerTrainingRunner.class));
+    }
+
+    private static ObjectMapper mapperMutatingBeforeRender(Runnable mutation) {
+        return new ObjectMapper() {
+            private boolean mutated;
+
+            @Override
+            public ObjectNode createObjectNode() {
+                if (!mutated) {
+                    mutated = true;
+                    mutation.run();
+                }
+                return super.createObjectNode();
+            }
+        };
     }
 
     private static EndpointResource endpoint(String name) {
