@@ -13,6 +13,7 @@ import io.github.hectorvent.floci.core.common.PaginatedResult;
 import io.github.hectorvent.floci.core.common.Pagination;
 import io.github.hectorvent.floci.core.common.RegionResolver;
 import io.github.hectorvent.floci.core.common.Resettable;
+import io.github.hectorvent.floci.core.common.SignedMarkers;
 import io.github.hectorvent.floci.core.resource.ExplorerResource;
 import io.github.hectorvent.floci.core.resource.ResourceProvider;
 import io.github.hectorvent.floci.core.resource.SupportedResourceType;
@@ -34,6 +35,8 @@ import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
 import java.math.BigDecimal;
+import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
@@ -53,6 +56,7 @@ public class StepFunctionsService implements Resettable, ResourceProvider {
 
     private static final Logger LOG = Logger.getLogger(StepFunctionsService.class);
     private static final int HISTORY_PERSIST_CHECKPOINT = 100;
+    private static final Duration LIST_EXECUTIONS_TOKEN_LIFETIME = Duration.ofHours(24);
 
     private final StorageBackend<String, StateMachine> stateMachineStore;
     private final StorageBackend<String, StateMachineAlias> stateMachineAliasStore;
@@ -102,6 +106,8 @@ public class StepFunctionsService implements Resettable, ResourceProvider {
     private final ObjectMapper objectMapper;
     private final SfnMockLoader mockLoader;
     private final StepFunctionsEventPublisher eventPublisher;
+    private final Clock clock;
+    private final SignedMarkers listExecutionTokens = new SignedMarkers();
 
     // Fields that are valid only in JSONPath mode. Validated against real AWS:
     // creating a JSONata state machine with any of these fields returns SCHEMA_VALIDATION_FAILED.
@@ -151,10 +157,18 @@ public class StepFunctionsService implements Resettable, ResourceProvider {
             new FieldStateTypeRule("Catch", Set.of("Task", "Parallel", "Map")),
             new FieldStateTypeRule("Retry", Set.of("Task", "Parallel", "Map")));
 
-    @Inject
     public StepFunctionsService(StorageFactory storageFactory, RegionResolver regionResolver,
                                 AslExecutor aslExecutor, ObjectMapper objectMapper,
                                 SfnMockLoader mockLoader, StepFunctionsEventPublisher eventPublisher) {
+        this(storageFactory, regionResolver, aslExecutor, objectMapper, mockLoader, eventPublisher,
+                Clock.systemUTC());
+    }
+
+    @Inject
+    public StepFunctionsService(StorageFactory storageFactory, RegionResolver regionResolver,
+                                AslExecutor aslExecutor, ObjectMapper objectMapper,
+                                SfnMockLoader mockLoader, StepFunctionsEventPublisher eventPublisher,
+                                Clock clock) {
         this.stateMachineStore = storageFactory.create("stepfunctions", "sfn-state-machines.json",
                 new TypeReference<Map<String, StateMachine>>() {});
         this.executionStore = storageFactory.create("stepfunctions", "sfn-executions.json",
@@ -173,6 +187,7 @@ public class StepFunctionsService implements Resettable, ResourceProvider {
         this.objectMapper = objectMapper;
         this.mockLoader = mockLoader;
         this.eventPublisher = eventPublisher;
+        this.clock = clock;
     }
 
     public void clear() {
@@ -1022,8 +1037,8 @@ public class StepFunctionsService implements Resettable, ResourceProvider {
                 .toList();
         String namespace = "states:executions:" + regionResolver.getAccountId() + ":"
                 + stateMachineArn + ":" + (statusFilter == null ? "*" : statusFilter);
-        return Pagination.paginate(matching, StepFunctionsService::executionPaginationCursor,
-                pageSize, nextToken, namespace,
+        return Pagination.paginateExpiring(matching, StepFunctionsService::executionPaginationCursor,
+                pageSize, nextToken, namespace, clock, LIST_EXECUTIONS_TOKEN_LIFETIME, listExecutionTokens,
                 token -> new AwsException("InvalidToken", "Invalid nextToken.", 400));
     }
 
