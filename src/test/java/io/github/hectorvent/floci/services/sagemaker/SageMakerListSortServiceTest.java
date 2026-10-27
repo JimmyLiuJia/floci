@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Supplier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -325,15 +326,30 @@ class SageMakerListSortServiceTest {
     void listOperationsReportBothInvalidSortValues() throws Exception {
         SageMakerService service = service(new InMemoryStorage<>(), new InMemoryStorage<>(), new InMemoryStorage<>());
         JsonNode request = mapper.readTree("{\"SortBy\":\"BadBy\",\"SortOrder\":\"BadOrder\"}");
-        String sortByError = "Value 'BadBy' at 'sortBy' failed to satisfy constraint: "
-                + "Member must satisfy enum value set: [Name, CreationTime]";
         String sortOrderError = "Value 'BadOrder' at 'sortOrder' failed to satisfy constraint: "
                 + "Member must satisfy enum value set: [Ascending, Descending]";
 
-        AwsException error = assertThrows(AwsException.class, () -> service.listModels(request, REGION));
-        assertEquals("ValidationException", error.getErrorCode());
-        assertEquals("2 validation errors detected: " + sortByError + "; " + sortOrderError,
-                error.getMessage());
+        String twoValueSortByError = "Value 'BadBy' at 'sortBy' failed to satisfy constraint: "
+                + "Member must satisfy enum value set: [Name, CreationTime, Status]";
+        String twoValueMessage = "2 validation errors detected: " + twoValueSortByError + "; " + sortOrderError;
+        for (Supplier<ObjectNode> operation : List.of(
+                (Supplier<ObjectNode>) () -> service.listEndpoints(request, REGION),
+                () -> service.listTrainingJobs(request, REGION))) {
+            AwsException error = assertThrows(AwsException.class, operation::get);
+            assertEquals("ValidationException", error.getErrorCode());
+            assertEquals(twoValueMessage, error.getMessage());
+        }
+
+        String modelSortByError = "Value 'BadBy' at 'sortBy' failed to satisfy constraint: "
+                + "Member must satisfy enum value set: [Name, CreationTime]";
+        String modelMessage = "2 validation errors detected: " + modelSortByError + "; " + sortOrderError;
+        for (Supplier<ObjectNode> operation : List.of(
+                (Supplier<ObjectNode>) () -> service.listModels(request, REGION),
+                () -> service.listEndpointConfigs(request, REGION))) {
+            AwsException error = assertThrows(AwsException.class, operation::get);
+            assertEquals("ValidationException", error.getErrorCode());
+            assertEquals(modelMessage, error.getMessage());
+        }
     }
 
     private SageMakerService service(InMemoryStorage<String, EndpointConfigResource> configs,

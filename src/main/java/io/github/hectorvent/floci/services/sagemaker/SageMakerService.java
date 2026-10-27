@@ -215,8 +215,9 @@ public class SageMakerService {
     }
 
     public ObjectNode listEndpointConfigs(JsonNode request, String region) {
-        String sortBy = sortBy(request, "CreationTime", "Name", "CreationTime");
-        String sortOrder = sortOrder(request, "Descending");
+        SortOptions sort = sortOptions(request, "CreationTime", "Descending", "Name", "CreationTime");
+        String sortBy = sort.sortBy();
+        String sortOrder = sort.sortOrder();
         Comparator<EndpointConfigResource> comparator = endpointConfigComparator(sortBy, sortOrder);
         List<EndpointConfigResource> configs = endpointConfigStore.scan(k -> k.startsWith(region + "::")).stream()
                 .sorted(comparator).toList();
@@ -307,8 +308,9 @@ public class SageMakerService {
     }
 
     public ObjectNode listEndpoints(JsonNode request, String region) {
-        String sortBy = sortBy(request, "CreationTime", "Name", "CreationTime", "Status");
-        String sortOrder = sortOrder(request, "Descending");
+        SortOptions sort = sortOptions(request, "CreationTime", "Descending", "Name", "CreationTime", "Status");
+        String sortBy = sort.sortBy();
+        String sortOrder = sort.sortOrder();
         Comparator<EndpointResource> comparator = endpointComparator(sortBy, sortOrder);
         List<EndpointResource> endpoints = endpointStore.scan(k -> k.startsWith(region + "::")).stream()
                 .map(SageMakerService::endpointListSnapshot)
@@ -398,8 +400,9 @@ public class SageMakerService {
     }
 
     public ObjectNode listTrainingJobs(JsonNode request, String region) {
-        String sortBy = sortBy(request, "CreationTime", "Name", "CreationTime", "Status");
-        String sortOrder = sortOrder(request, "Ascending");
+        SortOptions sort = sortOptions(request, "CreationTime", "Ascending", "Name", "CreationTime", "Status");
+        String sortBy = sort.sortBy();
+        String sortOrder = sort.sortOrder();
         Comparator<TrainingJobResource> comparator = trainingJobComparator(sortBy, sortOrder);
         List<TrainingJobResource> jobs = trainingJobStore.scan(k -> k.startsWith(region + "::")).stream()
                 .map(SageMakerService::trainingJobListSnapshot)
@@ -653,26 +656,6 @@ public class SageMakerService {
             remaining = remaining.stream().dropWhile(v -> comparator.compare(v, anchor) <= 0).toList();
         }
         return page(remaining, max, render, itemsField, value -> encodeCursor(cursorOf.apply(value), scope));
-    }
-
-    private static String sortBy(JsonNode request, String defaultValue, String... allowed) {
-        String value = text(request, "SortBy");
-        String selected = value == null ? defaultValue : value;
-        if (!List.of(allowed).contains(selected)) {
-            throw SmithyValidationErrors.validationException(List.of(
-                    SmithyValidationErrors.notInEnum(selected, "sortBy", List.of(allowed))));
-        }
-        return selected;
-    }
-
-    private static String sortOrder(JsonNode request, String defaultValue) {
-        String value = text(request, "SortOrder");
-        String selected = value == null ? defaultValue : value;
-        if (!selected.equals("Ascending") && !selected.equals("Descending")) {
-            throw SmithyValidationErrors.validationException(List.of(
-                    SmithyValidationErrors.notInEnum(selected, "sortOrder", List.of("Ascending", "Descending"))));
-        }
-        return selected;
     }
 
     private static SortOptions sortOptions(JsonNode request, String defaultSortBy, String defaultSortOrder,
