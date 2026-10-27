@@ -7,6 +7,7 @@ import java.time.Duration;
 import java.util.Comparator;
 import java.util.List;
 import java.util.function.Function;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 /**
@@ -82,6 +83,15 @@ public final class Pagination {
                                                            int limit, String nextToken, String namespace,
                                                            Clock clock, Duration lifetime, SignedMarkers markers,
                                                            Function<String, AwsException> invalidToken) {
+        return paginateExpiring(() -> all, cursorOf, limit, nextToken, namespace, clock, lifetime,
+                markers, invalidToken);
+    }
+
+    /** Decodes the token before loading items whose lookup can fail independently. */
+    public static <T> PaginatedResult<T> paginateExpiring(Supplier<List<T>> all, Function<T, String> cursorOf,
+                                                           int limit, String nextToken, String namespace,
+                                                           Clock clock, Duration lifetime, SignedMarkers markers,
+                                                           Function<String, AwsException> invalidToken) {
         if (limit < 1) {
             throw new IllegalArgumentException("limit must be at least 1, was " + limit);
         }
@@ -92,7 +102,7 @@ public final class Pagination {
         long nowMillis = clock.millis();
         String after = decodeExpiringCursor(nextToken, prefix, nowMillis, lifetime.toMillis(), markers, invalidToken);
         String tokenPrefix = prefix + nowMillis + ":";
-        return slice(all, cursorOf, limit, after, tokenPrefix, markers::issue);
+        return slice(all.get(), cursorOf, limit, after, tokenPrefix, markers::issue);
     }
 
     /** Paginates with instance-signed markers, optionally scoped by a prefix within the signed cursor. */

@@ -530,13 +530,13 @@ public class StepFunctionsJsonHandler {
         String nextToken = optionalText(request, "nextToken");
         int pageSize = StepFunctionsPaging.pageSize(maxResults, nextToken);
 
-        List<HistoryEvent> live = service.getExecutionHistory(arn);
-        List<HistoryEvent> events;
-        // Branch and iteration threads append under the history's own monitor while a client reads.
-        synchronized (live) {
-            events = new ArrayList<>(live);
-        }
-        PaginatedResult<HistoryEvent> page = Pagination.paginateExpiring(events,
+        PaginatedResult<HistoryEvent> page = Pagination.paginateExpiring(() -> {
+            List<HistoryEvent> live = service.getExecutionHistory(arn);
+            // Branch and iteration threads append under the history's own monitor while a client reads.
+            synchronized (live) {
+                return new ArrayList<>(live);
+            }
+        },
                 event -> historyEventCursor(event, reverseOrder), pageSize, nextToken,
                 historyTokenScope(arn, reverseOrder), clock, HISTORY_TOKEN_LIFETIME, historyTokens,
                 token -> invalidHistoryToken());
