@@ -19,6 +19,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
+import static io.github.hectorvent.floci.testing.ThreadStates.awaitBlockedOrDone;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
@@ -71,7 +72,7 @@ class LambdaCodeSigningAttachmentDeleteRaceTest {
                     mutation.accept(service);
                 });
                 assertTrue(started.await(5, TimeUnit.SECONDS));
-                awaitBlockedOnFunctionLock(worker.get());
+                awaitBlockedOrDone(worker.get());
                 service.deleteFunction(REGION, NAME);
                 assertFalse(store.getForAccount(ACCOUNT, REGION, NAME).isPresent());
             }
@@ -86,11 +87,4 @@ class LambdaCodeSigningAttachmentDeleteRaceTest {
         }
     }
 
-    private void awaitBlockedOnFunctionLock(Thread worker) {
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-        while (worker.getState() != Thread.State.BLOCKED && System.nanoTime() < deadline) {
-            Thread.onSpinWait();
-        }
-        assertEquals(Thread.State.BLOCKED, worker.getState());
-    }
 }

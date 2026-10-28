@@ -194,6 +194,7 @@ public class LambdaService implements ResourceProvider {
     private final DynamoDbStreamsEventSourcePoller dynamodbStreamsPoller;
     private final StorageFactory storageFactory;
     private final LambdaLayerService layerService;
+    private final LambdaCodeSigningConfigService codeSigningConfigService;
     private final Map<String, PendingReactiveSync> pendingReactiveSyncs = new ConcurrentHashMap<>();
     private final Map<String, Integer> runningReactiveSyncs = new ConcurrentHashMap<>();
     private final Map<String, String> failedReactiveSyncs = new ConcurrentHashMap<>();
@@ -263,32 +264,63 @@ public class LambdaService implements ResourceProvider {
         this.ec2Service = null;
         this.customResourceLiveness = null;
         this.durableExecutionService = null;
+        this.codeSigningConfigService = storageFactory == null
+                ? null : new LambdaCodeSigningConfigService(storageFactory, regionResolver);
         this.objectMapper = new ObjectMapper();
+    }
+
+    LambdaService(LambdaFunctionStore functionStore,
+                  LambdaExecutorService executorService,
+                  LambdaConcurrencyLimiter concurrencyLimiter,
+                  WarmPool warmPool,
+                  CodeStore codeStore,
+                  ZipExtractor zipExtractor,
+                  EmulatorConfig config,
+                  RegionResolver regionResolver,
+                  EsmStore esmStore,
+                  LambdaAliasStore aliasStore,
+                  LambdaTargetResolver targetResolver,
+                  S3Service s3Service,
+                  SqsService sqsService,
+                  SqsEventSourcePoller poller,
+                  KinesisEventSourcePoller kinesisPoller,
+                  DynamoDbStreamsEventSourcePoller dynamodbStreamsPoller,
+                  StorageFactory storageFactory,
+                  LambdaLayerService layerService,
+                  Ec2Service ec2Service,
+                  CustomResourceLiveness customResourceLiveness,
+                  DurableExecutionService durableExecutionService,
+                  ObjectMapper objectMapper) {
+        this(functionStore, executorService, concurrencyLimiter, warmPool, codeStore, zipExtractor, config,
+                regionResolver, esmStore, aliasStore, targetResolver, s3Service, sqsService, poller,
+                kinesisPoller, dynamodbStreamsPoller, storageFactory, layerService, ec2Service,
+                customResourceLiveness, durableExecutionService, objectMapper, null);
     }
 
     @Inject
     public LambdaService(LambdaFunctionStore functionStore,
-                          LambdaExecutorService executorService,
-                          LambdaConcurrencyLimiter concurrencyLimiter,
-                          WarmPool warmPool,
-                          CodeStore codeStore,
-                          ZipExtractor zipExtractor,
-                          EmulatorConfig config,
-                          RegionResolver regionResolver,
-                          EsmStore esmStore,
-                          LambdaAliasStore aliasStore,
-                          LambdaTargetResolver targetResolver,
-                          S3Service s3Service,
-                          SqsService sqsService,
-                          SqsEventSourcePoller poller,
-                          KinesisEventSourcePoller kinesisPoller,
-                          DynamoDbStreamsEventSourcePoller dynamodbStreamsPoller,
-                          StorageFactory storageFactory,
-                          LambdaLayerService layerService,
-                          Ec2Service ec2Service,
-                          CustomResourceLiveness customResourceLiveness,
-                          DurableExecutionService durableExecutionService,
-                          ObjectMapper objectMapper) {
+                         LambdaExecutorService executorService,
+                         LambdaConcurrencyLimiter concurrencyLimiter,
+                         WarmPool warmPool,
+                         CodeStore codeStore,
+                         ZipExtractor zipExtractor,
+                         EmulatorConfig config,
+                         RegionResolver regionResolver,
+                         EsmStore esmStore,
+                         LambdaAliasStore aliasStore,
+                         LambdaTargetResolver targetResolver,
+                         S3Service s3Service,
+                         SqsService sqsService,
+                         SqsEventSourcePoller poller,
+                         KinesisEventSourcePoller kinesisPoller,
+                         DynamoDbStreamsEventSourcePoller dynamodbStreamsPoller,
+                         StorageFactory storageFactory,
+                         LambdaLayerService layerService,
+                         Ec2Service ec2Service,
+                         CustomResourceLiveness customResourceLiveness,
+                         DurableExecutionService durableExecutionService,
+                         ObjectMapper objectMapper,
+                         LambdaCodeSigningConfigService codeSigningConfigService) {
         this.customResourceLiveness = customResourceLiveness;
         this.durableExecutionService = durableExecutionService;
         this.functionStore = functionStore;
@@ -310,6 +342,7 @@ public class LambdaService implements ResourceProvider {
         this.storageFactory = storageFactory;
         this.layerService = layerService;
         this.ec2Service = ec2Service;
+        this.codeSigningConfigService = codeSigningConfigService;
         this.objectMapper = objectMapper;
     }
 
@@ -440,6 +473,22 @@ public class LambdaService implements ResourceProvider {
     }
 
     public LambdaFunction createFunction(String region, Map<String, Object> request) {
+        Object codeSigningConfigValue = request.get("CodeSigningConfigArn");
+        if (codeSigningConfigValue == null) {
+            return createFunctionInternal(region, request);
+        }
+        if (codeSigningConfigService == null) {
+            throw new IllegalStateException("Lambda code-signing configuration service is unavailable");
+        }
+        String codeSigningConfigArn = codeSigningConfigValue.toString();
+        // Keep the configuration alive until the function record is stored. DeleteCodeSigningConfig
+        // uses the same lock while checking attached functions, so a concurrent create cannot
+        // validate a configuration and then leave a dangling attachment after deletion.
+        return codeSigningConfigService.withConfigLock(codeSigningConfigArn,
+                () -> createFunctionInternal(region, request));
+    }
+
+    private LambdaFunction createFunctionInternal(String region, Map<String, Object> request) {
         Map<String, Object> environment = structureMember(request, "Environment");
         Map<String, String> environmentVariables = environmentVariables(environment);
         Map<String, Object> ephemeralStorage = structureMember(request, "EphemeralStorage");
@@ -459,6 +508,8 @@ public class LambdaService implements ResourceProvider {
         validateEnum(request.get("PackageType"), "packageType", List.of("Zip", "Image"));
         String packageType = request.getOrDefault("PackageType", "Zip").toString();
         String description = (String) request.get("Description");
+        String codeSigningConfigArn = request.get("CodeSigningConfigArn") == null
+                ? null : request.get("CodeSigningConfigArn").toString();
         DurableConfigRequest durable = durableConfigRequest(durableConfig);
         int defaultTimeout = config != null ? config.services().lambda().defaultTimeoutSeconds() : 3;
         if (durable != null) {
@@ -492,6 +543,13 @@ public class LambdaService implements ResourceProvider {
         }
         validateEnum(runtime, "runtime", RUNTIME_VALUES);
         validateMaxLength(description, "description", 256);
+        if (codeSigningConfigArn != null) {
+            if (codeSigningConfigService == null) {
+                throw new IllegalStateException("Lambda code-signing configuration service is unavailable");
+            }
+            codeSigningConfigService.requireForAttachment(
+                    region, regionResolver.getAccountId(), codeSigningConfigArn);
+        }
 
         @SuppressWarnings("unchecked")
         Map<String, String> tags = (Map<String, String>) request.get("Tags");
@@ -516,6 +574,7 @@ public class LambdaService implements ResourceProvider {
         fn.setState("Active");
         fn.setLastModified(System.currentTimeMillis());
         fn.setRevisionId(UUID.randomUUID().toString());
+        fn.setCodeSigningConfigArn(codeSigningConfigArn);
 
         // Handle environment variables
         if (environment != null) {

@@ -801,6 +801,11 @@ public class LambdaController {
             node.put("KMSKeyArn", fn.getKmsKeyArn());
         }
 
+        // CodeSigningConfigArn — only when set
+        if (fn.getCodeSigningConfigArn() != null) {
+            node.put("CodeSigningConfigArn", fn.getCodeSigningConfigArn());
+        }
+
         if (fn.getFileSystemConfigs() != null && !fn.getFileSystemConfigs().isEmpty()) {
             ArrayNode fileSystems = node.putArray("FileSystemConfigs");
             fn.getFileSystemConfigs().forEach(fileSystem -> fileSystems.addObject()

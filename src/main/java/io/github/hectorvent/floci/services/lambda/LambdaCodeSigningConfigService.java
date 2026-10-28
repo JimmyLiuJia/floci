@@ -6,6 +6,7 @@ import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.PaginatedResult;
 import io.github.hectorvent.floci.core.common.RegionResolver;
 import io.github.hectorvent.floci.core.common.SignedMarkers;
+import io.github.hectorvent.floci.core.common.SmithyValidationErrors;
 import io.github.hectorvent.floci.core.storage.StorageBackend;
 import io.github.hectorvent.floci.core.storage.StorageFactory;
 import io.github.hectorvent.floci.services.lambda.model.CodeSigningConfig;
@@ -114,6 +115,23 @@ public class LambdaCodeSigningConfigService {
             throw notFound(arn);
         }
         return config;
+    }
+
+    /**
+     * Validates and resolves a configuration named by a function attachment request. The Lambda
+     * APIs use a distinct error code when the requested configuration does not exist, while the
+     * configuration resource APIs keep {@code ResourceNotFoundException}.
+     */
+    public CodeSigningConfig requireForAttachment(String region, String accountId, String arn) {
+        validateArn(arn);
+        try {
+            return get(region, accountId, arn);
+        } catch (AwsException e) {
+            if (!"ResourceNotFoundException".equals(e.getErrorCode())) {
+                throw e;
+            }
+            throw new AwsException("CodeSigningConfigNotFoundException", e.getMessage(), 404);
+        }
     }
 
     /**
@@ -235,9 +253,8 @@ public class LambdaCodeSigningConfigService {
         if (arn == null || arn.isBlank()
                 || arn.length() > ARN_MAX_LENGTH
                 || !CODE_SIGNING_CONFIG_ARN.matcher(arn).matches()) {
-            throw new AwsException("InvalidParameterValueException",
-                    "Value '" + arn + "' at 'codeSigningConfigArn' failed to satisfy constraint: "
-                            + "Member must satisfy regular expression pattern: " + CODE_SIGNING_CONFIG_ARN.pattern(), 400);
+            throw SmithyValidationErrors.exception("InvalidParameterValueException",
+                    SmithyValidationErrors.pattern("codeSigningConfigArn", arn, CODE_SIGNING_CONFIG_ARN.pattern()));
         }
     }
 

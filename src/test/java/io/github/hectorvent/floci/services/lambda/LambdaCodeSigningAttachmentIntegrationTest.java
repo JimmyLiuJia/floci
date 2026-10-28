@@ -25,8 +25,8 @@ class LambdaCodeSigningAttachmentIntegrationTest {
         String functionName = "signing-lifecycle-" + System.nanoTime();
         String functionPath = LEGACY_FUNCTIONS + "/" + functionName;
         String arn = createConfig();
-        createFunction(functionName);
         try {
+            createFunction(functionName);
             given().contentType("application/json")
                     .body("{\"CodeSigningConfigArn\":\"" + arn + "\"}")
                     .when().put(SIGNING + "/functions/" + functionName + "/code-signing-config")
@@ -60,7 +60,11 @@ class LambdaCodeSigningAttachmentIntegrationTest {
                     .body("CodeSigningConfigArn", is(""));
             given().when().delete(CONFIGS + "/" + arn).then().statusCode(204);
         } finally {
-            given().when().delete(functionPath).then().statusCode(204);
+            try {
+                given().when().delete(functionPath);
+            } finally {
+                given().when().delete(CONFIGS + "/" + arn);
+            }
         }
     }
 
@@ -89,6 +93,43 @@ class LambdaCodeSigningAttachmentIntegrationTest {
     }
 
     @Test
+    void createFunctionAttachesExistingConfiguration() {
+        String functionName = "signing-create-" + System.nanoTime();
+        String functionPath = LEGACY_FUNCTIONS + "/" + functionName;
+        String arn = createConfig();
+        try {
+            given().contentType("application/json")
+                    .body("{\"FunctionName\":\"" + functionName + "\",\"Runtime\":\"nodejs20.x\","
+                            + "\"Role\":\"arn:aws:iam::000000000000:role/lambda-role\","
+                            + "\"Handler\":\"index.handler\",\"CodeSigningConfigArn\":\"" + arn + "\"}")
+                    .when().post(LEGACY_FUNCTIONS)
+                    .then().statusCode(201)
+                    .body("CodeSigningConfigArn", is(arn));
+
+            given().when().get(SIGNING + "/functions/" + functionName + "/code-signing-config")
+                    .then().statusCode(200)
+                    .body("CodeSigningConfigArn", is(arn));
+        } finally {
+            given().when().delete(functionPath).then().statusCode(204);
+            given().when().delete(CONFIGS + "/" + arn).then().statusCode(204);
+        }
+    }
+
+    @Test
+    void createFunctionRejectsUnknownCodeSigningConfiguration() {
+        String functionName = "signing-create-missing-" + System.nanoTime();
+        String unknownArn = "arn:aws:lambda:us-east-1:000000000000:code-signing-config:csc-abcdefghij1234567";
+
+        given().contentType("application/json")
+                .body("{\"FunctionName\":\"" + functionName + "\",\"Runtime\":\"nodejs20.x\","
+                        + "\"Role\":\"arn:aws:iam::000000000000:role/lambda-role\","
+                        + "\"Handler\":\"index.handler\",\"CodeSigningConfigArn\":\"" + unknownArn + "\"}")
+                .when().post(LEGACY_FUNCTIONS)
+                .then().statusCode(404)
+                .body("__type", is("CodeSigningConfigNotFoundException"));
+    }
+
+    @Test
     void listFunctionsByCodeSigningConfigPaginatesAttachedFunctions() {
         String suffix = String.valueOf(System.nanoTime());
         String firstFunction = "signing-page-a-" + suffix;
@@ -96,9 +137,9 @@ class LambdaCodeSigningAttachmentIntegrationTest {
         String firstPath = LEGACY_FUNCTIONS + "/" + firstFunction;
         String secondPath = LEGACY_FUNCTIONS + "/" + secondFunction;
         String arn = createConfig();
-        createFunction(firstFunction);
-        createFunction(secondFunction);
         try {
+            createFunction(firstFunction);
+            createFunction(secondFunction);
             attach(firstFunction, arn);
             attach(secondFunction, arn);
 
@@ -121,11 +162,23 @@ class LambdaCodeSigningAttachmentIntegrationTest {
             assertThat(secondPage.path("FunctionArns"), hasSize(1));
             assertThat(secondPage.path("NextMarker"), nullValue());
         } finally {
-            detach(firstFunction);
-            detach(secondFunction);
-            given().when().delete(firstPath).then().statusCode(204);
-            given().when().delete(secondPath).then().statusCode(204);
-            given().when().delete(CONFIGS + "/" + arn).then().statusCode(204);
+            try {
+                detach(firstFunction);
+            } finally {
+                try {
+                    detach(secondFunction);
+                } finally {
+                    try {
+                        given().when().delete(firstPath);
+                    } finally {
+                        try {
+                            given().when().delete(secondPath);
+                        } finally {
+                            given().when().delete(CONFIGS + "/" + arn);
+                        }
+                    }
+                }
+            }
         }
     }
 

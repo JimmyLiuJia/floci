@@ -2,7 +2,6 @@ package io.github.hectorvent.floci.services.lambda;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.RegionResolver;
 import io.github.hectorvent.floci.services.lambda.model.LambdaFunction;
 import jakarta.inject.Inject;
@@ -77,14 +76,7 @@ public class LambdaCodeSigningController {
                 ? null : body.get("CodeSigningConfigArn").asText();
         LambdaCodeSigningConfigService.validateArn(arn);
         return configService.withConfigLock(arn, () -> {
-            try {
-                configService.get(region, regionResolver.getAccountId(), arn);
-            } catch (AwsException e) {
-                if (!"ResourceNotFoundException".equals(e.getErrorCode())) {
-                    throw e;
-                }
-                throw new AwsException("CodeSigningConfigNotFoundException", e.getMessage(), 404);
-            }
+            configService.requireForAttachment(region, regionResolver.getAccountId(), arn);
             LambdaFunction fn = lambdaService.putFunctionCodeSigningConfig(region, functionName, arn);
 
             ObjectNode root = objectMapper.createObjectNode();
