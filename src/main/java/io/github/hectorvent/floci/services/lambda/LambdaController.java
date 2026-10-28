@@ -234,12 +234,11 @@ public class LambdaController {
     public Response getFunctionCodeSigningConfig(@Context HttpHeaders headers,
                                                   @PathParam("functionName") String functionName) {
         String region = regionResolver.resolveRegion(headers);
-        // Verify the function exists
-        lambdaService.getFunction(region, functionName);
-        // Return empty code signing config — floci does not enforce code signing
+        LambdaFunction fn = lambdaService.getFunctionForCodeSigningConfig(region, functionName);
         ObjectNode root = objectMapper.createObjectNode();
-        root.put("CodeSigningConfigArn", "");
-        root.put("FunctionName", functionName);
+        root.put("CodeSigningConfigArn", fn.getCodeSigningConfigArn() == null
+                ? "" : fn.getCodeSigningConfigArn());
+        root.put("FunctionName", fn.getFunctionName());
         return Response.ok(root).build();
     }
 
