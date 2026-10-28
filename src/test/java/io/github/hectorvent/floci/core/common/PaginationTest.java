@@ -175,7 +175,8 @@ class PaginationTest {
     @Test
     void boundedNamespacedPaging_refusesOutOfRangeSizes() {
         for (int size : new int[] {-1, 0, 4}) {
-            assertInvalid(() -> bounded(size, null));
+            AwsException error = assertInvalid(() -> bounded(size, null));
+            assertEquals("Page size must be between 1 and 3.", error.getMessage());
         }
     }
 
@@ -187,7 +188,13 @@ class PaginationTest {
         assertTrue(bounded(1, boundary).items().isEmpty());
         String token = Base64.getUrlEncoder().withoutPadding()
                 .encodeToString(("ns:" + "a".repeat(100)).getBytes(StandardCharsets.UTF_8));
-        assertInvalid(() -> bounded(1, token));
+        AwsException error = assertInvalid(() -> bounded(1, token));
+        assertEquals("Pagination token must not exceed 32 characters.", error.getMessage());
+    }
+
+    @Test
+    void boundedNamespacedPaging_treatsAnEmptyTokenAsTheFirstPage() {
+        assertThat(bounded(1, "").items(), contains("a"));
     }
 
     @Test
@@ -211,12 +218,14 @@ class PaginationTest {
 
     @Test
     void unencodedPagingValidatesBoundsAndTokenLength() {
-        assertInvalid(() -> Pagination.paginateUnencoded(ITEMS, Function.identity(),
-                0, null, 2, 3, 128, "InvalidInput"));
-        assertInvalid(() -> Pagination.paginateUnencoded(ITEMS, Function.identity(),
-                1, "", 2, 3, 128, "InvalidInput"));
-        assertInvalid(() -> Pagination.paginateUnencoded(ITEMS, Function.identity(),
-                1, "x".repeat(129), 2, 3, 128, "InvalidInput"));
+        AwsException pageSizeError = assertInvalid(() -> Pagination.paginateUnencoded(ITEMS,
+                Function.identity(), 0, null, 2, 3, 128, "InvalidInput"));
+        assertEquals("Page size must be between 1 and 3.", pageSizeError.getMessage());
+        for (String token : List.of("", "x".repeat(129))) {
+            AwsException tokenError = assertInvalid(() -> Pagination.paginateUnencoded(ITEMS,
+                    Function.identity(), 1, token, 2, 3, 128, "InvalidInput"));
+            assertEquals("Pagination token must be between 1 and 128 characters.", tokenError.getMessage());
+        }
     }
 
     @Test
@@ -255,10 +264,11 @@ class PaginationTest {
         return Pagination.paginate(ITEMS, Function.identity(), size, token, 2, 3, 32, "InvalidInput", "ns");
     }
 
-    private static void assertInvalid(Executable call) {
+    private static AwsException assertInvalid(Executable call) {
         AwsException error = assertThrows(AwsException.class, call);
         assertEquals("InvalidInput", error.getErrorCode());
         assertEquals(400, error.getHttpStatus());
+        return error;
     }
 
     private static PaginatedResult<String> page(int limit, String token, String namespace) {
