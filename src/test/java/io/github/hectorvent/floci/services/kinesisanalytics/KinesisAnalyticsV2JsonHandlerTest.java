@@ -39,11 +39,15 @@ class KinesisAnalyticsV2JsonHandlerTest {
     }
 
     private void createApplication(String name) {
+        createApplication(name, REGION);
+    }
+
+    private void createApplication(String name, String region) {
         ObjectNode req = MAPPER.createObjectNode();
         req.put("ApplicationName", name);
         req.put("RuntimeEnvironment", "FLINK-1_18");
         req.put("ServiceExecutionRole", ROLE);
-        assertThat(handler.handle("CreateApplication", req, REGION).getStatus(), is(200));
+        assertThat(handler.handle("CreateApplication", req, region).getStatus(), is(200));
     }
 
     @Test
@@ -99,6 +103,58 @@ class KinesisAnalyticsV2JsonHandlerTest {
         assertThat(resp.getStatus(), is(200));
         JsonNode summaries = entity(resp).get("ApplicationSummaries");
         assertEquals(2, summaries.size());
+    }
+
+    @Test
+    void listApplicationsHonorsLimitAndReturnsNextToken() {
+        String longName = "a".repeat(128);
+        createApplication(longName);
+        createApplication("demo-b");
+
+        ObjectNode request = MAPPER.createObjectNode().put("Limit", 1);
+        ObjectNode firstPage = entity(handler.handle("ListApplications", request, REGION));
+
+        assertEquals(1, firstPage.get("ApplicationSummaries").size());
+        assertEquals(longName, firstPage.get("ApplicationSummaries").get(0).get("ApplicationName").asText());
+        assertThat(firstPage.hasNonNull("NextToken"), is(true));
+        String token = firstPage.get("NextToken").asText();
+        assertThat(token.length() <= 128, is(true));
+
+        createApplication("a0");
+        ObjectNode secondRequest = MAPPER.createObjectNode().put("Limit", 1).put("NextToken", token);
+        ObjectNode secondPage = entity(handler.handle("ListApplications", secondRequest, REGION));
+        assertEquals("demo-b", secondPage.get("ApplicationSummaries").get(0).get("ApplicationName").asText());
+        assertThat(secondPage.has("NextToken"), is(false));
+    }
+
+    @Test
+    void listApplicationsRejectsInvalidLimitAndToken() {
+        createApplication("demo-a");
+        for (int limit : new int[]{0, 51}) {
+            AwsException error = assertThrows(AwsException.class, () -> handler.handle("ListApplications",
+                    MAPPER.createObjectNode().put("Limit", limit), REGION));
+            assertEquals("InvalidRequestException", error.getErrorCode());
+        }
+        for (String token : new String[]{"", "not-a-token", "x".repeat(129)}) {
+            AwsException error = assertThrows(AwsException.class, () -> handler.handle("ListApplications",
+                    MAPPER.createObjectNode().put("NextToken", token), REGION));
+            assertEquals("InvalidRequestException", error.getErrorCode());
+        }
+    }
+
+    @Test
+    void listApplicationsRejectsTokenFromAnotherRegion() {
+        createApplication("demo-a", REGION);
+        createApplication("demo-b", REGION);
+        createApplication("demo-a", "us-west-2");
+        createApplication("demo-b", "us-west-2");
+
+        ObjectNode firstPage = entity(handler.handle("ListApplications",
+                MAPPER.createObjectNode().put("Limit", 1), REGION));
+        String token = firstPage.get("NextToken").asText();
+        AwsException error = assertThrows(AwsException.class, () -> handler.handle("ListApplications",
+                MAPPER.createObjectNode().put("Limit", 1).put("NextToken", token), "us-west-2"));
+        assertEquals("InvalidRequestException", error.getErrorCode());
     }
 
     @Test
