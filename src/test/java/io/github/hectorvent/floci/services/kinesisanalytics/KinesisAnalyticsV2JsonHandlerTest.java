@@ -128,6 +128,25 @@ class KinesisAnalyticsV2JsonHandlerTest {
     }
 
     @Test
+    void listApplicationsUsesDefaultPageSizeAndEndsWithoutToken() {
+        for (int index = 0; index < 51; index++) {
+            createApplication(String.format("default-page-%02d", index));
+        }
+
+        ObjectNode firstPage = entity(handler.handle("ListApplications", MAPPER.createObjectNode(), REGION));
+
+        assertEquals(50, firstPage.get("ApplicationSummaries").size());
+        assertThat(firstPage.hasNonNull("NextToken"), is(true));
+
+        ObjectNode secondRequest = MAPPER.createObjectNode().put("NextToken",
+                firstPage.get("NextToken").asText());
+        ObjectNode secondPage = entity(handler.handle("ListApplications", secondRequest, REGION));
+
+        assertEquals(1, secondPage.get("ApplicationSummaries").size());
+        assertThat(secondPage.has("NextToken"), is(false));
+    }
+
+    @Test
     void listApplicationsRejectsInvalidLimitAndToken() {
         createApplication("demo-a");
         for (int limit : new int[]{0, 51}) {
