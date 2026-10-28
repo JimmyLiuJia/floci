@@ -77,7 +77,6 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.function.Consumer;
-import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
@@ -140,10 +139,8 @@ public class LambdaService implements ResourceProvider {
     private static final Pattern FUNCTION_URL_QUALIFIER_PATTERN = Pattern.compile("^(?!^\\d+$)[0-9a-zA-Z-_]+$");
     private static final Pattern EVENT_SOURCE_ARN_PATTERN = Pattern.compile(
             "^arn:(aws[a-zA-Z0-9-]*):([a-zA-Z0-9-])+:((eusc-)?[a-z]{2}((-gov)|(-iso([a-z]?)))?-[a-z]+-\\d{1})?:(\\d{12})?:(.*)$");
-    private static final Pattern LIST_ESM_FUNCTION_NAME_PATTERN = Pattern.compile(
-            "^(arn:(aws[a-zA-Z-]*)?:lambda:)?(?<region>(eusc-)?[a-z]{2}((-gov)|(-iso([a-z]?)))?-[a-z]+-\\d{1}:)?"
-                    + "(?<account>\\d{12}:)?(function:)?(?<name>[a-zA-Z0-9-_\\.]+)"
-                    + "(:(\\$LATEST(\\.PUBLISHED)?|[a-zA-Z0-9-_]+))?$");
+    private static final Pattern LIST_ESM_FUNCTION_NAME_PATTERN =
+            LambdaArnUtils.NAMESPACED_FUNCTION_NAME_PATTERN;
     // AddPermission members: botocore's PrincipalOrgID, SourceOwner and EventSourceToken shapes.
     private static final Pattern PRINCIPAL_ORG_ID_PATTERN = Pattern.compile("o-[a-z0-9]{10,32}");
     private static final Pattern ACCOUNT_ID_PATTERN = Pattern.compile("\\d{12}");
@@ -640,36 +637,24 @@ public class LambdaService implements ResourceProvider {
     private String codeSigningFunctionName(String region, String functionName) {
         // Code-signing attachment APIs use botocore's NamespacedFunctionName
         // (max 256, dots allowed), not the narrower shape used by other routes.
-        Matcher reference = functionName == null ? null : LIST_ESM_FUNCTION_NAME_PATTERN.matcher(functionName);
-        if (functionName == null || functionName.isEmpty() || functionName.length() > 256
-                || !reference.matches()) {
-            throw SmithyValidationErrors.validationException(
-                    "Value '" + functionName + "' at 'functionName' failed to satisfy constraint: "
-                            + "Member must satisfy regular expression pattern: "
-                            + LIST_ESM_FUNCTION_NAME_PATTERN.pattern());
-        }
-        if (reference.group(1) != null) {
-            if (!AwsArnUtils.isArn(functionName)) {
-                throw new AwsException("ResourceNotFoundException", "Function not found: " + functionName, 404);
-            }
+        LambdaArnUtils.ResolvedFunctionRef reference =
+                LambdaArnUtils.resolveNamespacedFunctionName(functionName);
+        if (AwsArnUtils.isArn(functionName)) {
             AwsArnUtils.Arn arn = AwsArnUtils.parse(functionName);
             if (!region.equals(arn.region())
                     || !regionResolver.getAccountId().equals(arn.accountId())
                     || !AwsRegions.partitionFor(region).equals(arn.partition())) {
                 throw new AwsException("ResourceNotFoundException", "Function not found: " + functionName, 404);
             }
-            return reference.group("name");
+            return reference.name();
         }
         // The shape matcher backtracks when a would-be prefix is actually a bare name or
         // a qualified name (for example, "us-east-1:$LATEST").
-        String partialRegion = reference.group("region");
-        String partialAccount = reference.group("account");
-        if ((partialRegion != null && !region.equals(partialRegion.substring(0, partialRegion.length() - 1)))
-                || (partialAccount != null && !regionResolver.getAccountId().equals(
-                        partialAccount.substring(0, partialAccount.length() - 1)))) {
+        if ((reference.region() != null && !region.equals(reference.region()))
+                || (reference.account() != null && !regionResolver.getAccountId().equals(reference.account()))) {
             throw new AwsException("ResourceNotFoundException", "Function not found: " + functionName, 404);
         }
-        return reference.group("name");
+        return reference.name();
     }
 
     /** Attaches or replaces a code-signing configuration on the function's {@code $LATEST}. */
