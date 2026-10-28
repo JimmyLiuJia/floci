@@ -12,6 +12,7 @@ import io.github.hectorvent.floci.core.common.AwsPartitions;
 import io.github.hectorvent.floci.core.common.AwsRegions;
 import io.github.hectorvent.floci.core.common.CustomResourceLiveness;
 import io.github.hectorvent.floci.core.common.PaginatedResult;
+import io.github.hectorvent.floci.core.common.Pagination;
 import io.github.hectorvent.floci.core.common.RegionResolver;
 import io.github.hectorvent.floci.core.common.RequestScopes;
 import io.github.hectorvent.floci.core.common.SignedMarkers;
@@ -76,6 +77,7 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.function.Consumer;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
@@ -139,8 +141,9 @@ public class LambdaService implements ResourceProvider {
     private static final Pattern EVENT_SOURCE_ARN_PATTERN = Pattern.compile(
             "^arn:(aws[a-zA-Z0-9-]*):([a-zA-Z0-9-])+:((eusc-)?[a-z]{2}((-gov)|(-iso([a-z]?)))?-[a-z]+-\\d{1})?:(\\d{12})?:(.*)$");
     private static final Pattern LIST_ESM_FUNCTION_NAME_PATTERN = Pattern.compile(
-            "^(arn:(aws[a-zA-Z-]*)?:lambda:)?((eusc-)?[a-z]{2}((-gov)|(-iso([a-z]?)))?-[a-z]+-\\d{1}:)?(\\d{12}:)?"
-                    + "(function:)?([a-zA-Z0-9-_\\.]+)(:(\\$LATEST(\\.PUBLISHED)?|[a-zA-Z0-9-_]+))?$");
+            "^(arn:(aws[a-zA-Z-]*)?:lambda:)?(?<region>(eusc-)?[a-z]{2}((-gov)|(-iso([a-z]?)))?-[a-z]+-\\d{1}:)?"
+                    + "(?<account>\\d{12}:)?(function:)?(?<name>[a-zA-Z0-9-_\\.]+)"
+                    + "(:(\\$LATEST(\\.PUBLISHED)?|[a-zA-Z0-9-_]+))?$");
     // AddPermission members: botocore's PrincipalOrgID, SourceOwner and EventSourceToken shapes.
     private static final Pattern PRINCIPAL_ORG_ID_PATTERN = Pattern.compile("o-[a-z0-9]{10,32}");
     private static final Pattern ACCOUNT_ID_PATTERN = Pattern.compile("\\d{12}");
@@ -207,6 +210,7 @@ public class LambdaService implements ResourceProvider {
     private final ConcurrentHashMap<String, Object> policyMutationLocks = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, Object> versionCounterLocks = new ConcurrentHashMap<>();
     private final SignedMarkers listFunctionMarkers = new SignedMarkers();
+    private final SignedMarkers codeSigningFunctionMarkers = new SignedMarkers();
 
     /**
      * Package-private constructor for testing without CDI. Config defaults
@@ -622,6 +626,107 @@ public class LambdaService implements ResourceProvider {
         return functionStore.get(region, canonical)
                 .orElseThrow(() -> new AwsException("ResourceNotFoundException",
                         "Function not found: " + functionName, 404));
+    }
+
+    /** Resolves the $LATEST record that owns the code-signing attachment. */
+    public LambdaFunction getFunctionForCodeSigningConfig(String region, String functionName) {
+        String name = codeSigningFunctionName(region, functionName);
+        Optional<LambdaFunction> function = functionStore.getForAccount(
+                regionResolver.getAccountId(), region, name);
+        return function.orElseThrow(() -> new AwsException("ResourceNotFoundException",
+                "Function not found: " + functionName, 404));
+    }
+
+    private String codeSigningFunctionName(String region, String functionName) {
+        // Code-signing attachment APIs use botocore's NamespacedFunctionName
+        // (max 256, dots allowed), not the narrower shape used by other routes.
+        Matcher reference = functionName == null ? null : LIST_ESM_FUNCTION_NAME_PATTERN.matcher(functionName);
+        if (functionName == null || functionName.isEmpty() || functionName.length() > 256
+                || !reference.matches()) {
+            throw SmithyValidationErrors.validationException(
+                    "Value '" + functionName + "' at 'functionName' failed to satisfy constraint: "
+                            + "Member must satisfy regular expression pattern: "
+                            + LIST_ESM_FUNCTION_NAME_PATTERN.pattern());
+        }
+        if (reference.group(1) != null) {
+            if (!AwsArnUtils.isArn(functionName)) {
+                throw new AwsException("ResourceNotFoundException", "Function not found: " + functionName, 404);
+            }
+            AwsArnUtils.Arn arn = AwsArnUtils.parse(functionName);
+            if (!region.equals(arn.region())
+                    || !regionResolver.getAccountId().equals(arn.accountId())
+                    || !AwsRegions.partitionFor(region).equals(arn.partition())) {
+                throw new AwsException("ResourceNotFoundException", "Function not found: " + functionName, 404);
+            }
+            return reference.group("name");
+        }
+        // The shape matcher backtracks when a would-be prefix is actually a bare name or
+        // a qualified name (for example, "us-east-1:$LATEST").
+        String partialRegion = reference.group("region");
+        String partialAccount = reference.group("account");
+        if ((partialRegion != null && !region.equals(partialRegion.substring(0, partialRegion.length() - 1)))
+                || (partialAccount != null && !regionResolver.getAccountId().equals(
+                        partialAccount.substring(0, partialAccount.length() - 1)))) {
+            throw new AwsException("ResourceNotFoundException", "Function not found: " + functionName, 404);
+        }
+        return reference.group("name");
+    }
+
+    /** Attaches or replaces a code-signing configuration on the function's {@code $LATEST}. */
+    public LambdaFunction putFunctionCodeSigningConfig(String region, String functionName,
+                                                       String codeSigningConfigArn) {
+        String name = codeSigningFunctionName(region, functionName);
+        String functionArn = regionResolver.buildArn("lambda", region, "function:" + name);
+        synchronized (lockForConcurrencyOp(functionArn)) {
+            LambdaFunction function = getFunctionForCodeSigningConfig(region, functionName);
+            function.setAccountId(regionResolver.getAccountId());
+            function.setCodeSigningConfigArn(codeSigningConfigArn);
+            function.setLastModified(System.currentTimeMillis());
+            function.setRevisionId(UUID.randomUUID().toString());
+            // The account-aware lookup may have migrated a legacy record whose model predates
+            // accountId. The lookup already proved ownership from the ARN, so keep the write in
+            // the caller's partition instead of falling back to the default account.
+            functionStore.saveForAccount(regionResolver.getAccountId(), region, function);
+            return function;
+        }
+    }
+
+    /** Removes a code-signing configuration from the function's {@code $LATEST}. */
+    public void deleteFunctionCodeSigningConfig(String region, String functionName) {
+        String name = codeSigningFunctionName(region, functionName);
+        String functionArn = regionResolver.buildArn("lambda", region, "function:" + name);
+        synchronized (lockForConcurrencyOp(functionArn)) {
+            LambdaFunction function = getFunctionForCodeSigningConfig(region, functionName);
+            function.setAccountId(regionResolver.getAccountId());
+            function.setCodeSigningConfigArn(null);
+            function.setLastModified(System.currentTimeMillis());
+            function.setRevisionId(UUID.randomUUID().toString());
+            // See the PUT path above: legacy records can have a null accountId even after a
+            // caller-scoped lookup has established their owner.
+            functionStore.saveForAccount(regionResolver.getAccountId(), region, function);
+        }
+    }
+
+    /** Lists the full function ARNs that use a configuration in the caller's account and region. */
+    public PaginatedResult<String> listFunctionsByCodeSigningConfig(String region, String accountId,
+                                                                    String codeSigningConfigArn,
+                                                                    Integer maxItems, String marker) {
+        if (maxItems != null && (maxItems < 1 || maxItems > 10_000)) {
+            throw new AwsException("InvalidParameterValueException",
+                    "Value '" + maxItems + "' at 'maxItems' failed to satisfy constraint: "
+                            + "Member must be between 1 and 10000", 400);
+        }
+        String scope = accountId + "\n" + region + "\n" + codeSigningConfigArn + "\n";
+        List<String> functionArns = functionStore.listForAccount(accountId, region).stream()
+                .filter(function -> codeSigningConfigArn.equals(function.getCodeSigningConfigArn()))
+                .map(LambdaFunction::getFunctionArn)
+                .filter(Objects::nonNull)
+                .toList();
+        int limit = maxItems == null ? 50 : maxItems;
+        return Pagination.paginate(functionArns, value -> value, limit, marker,
+                codeSigningFunctionMarkers, scope,
+                ignored -> new AwsException("InvalidParameterValueException",
+                        "Invalid pagination key.", 400));
     }
 
     public boolean functionExists(String region, String functionName) {
@@ -2453,6 +2558,7 @@ public class LambdaService implements ResourceProvider {
             // point is that its bind-mounted directory tracks the developer's working tree.
             snapshot.setCodeLocalPath(versionCodePath(region, fn, String.valueOf(version)));
             snapshot.setCodeSha256(fn.getCodeSha256());
+            snapshot.setCodeSigningConfigArn(fn.getCodeSigningConfigArn());
             snapshot.setS3Bucket(fn.getS3Bucket());
             snapshot.setS3Key(fn.getS3Key());
             snapshot.setHotReloadHostPath(fn.getHotReloadHostPath());

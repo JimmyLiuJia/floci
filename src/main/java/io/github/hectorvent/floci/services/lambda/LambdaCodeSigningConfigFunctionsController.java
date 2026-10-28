@@ -35,11 +35,9 @@ import java.util.regex.Pattern;
  * instead of matching here.</p>
  *
  * <p>Create, Get, Update, Delete and List manage the configuration itself.
- * ListFunctionsByCodeSigningConfig reports which functions carry one, and always reports none:
- * attaching a configuration to a function is PutFunctionCodeSigningConfig, which is not
- * implemented, so nothing can be attached. It answers a configuration that does not exist with a
- * 404 rather than an empty list, because an empty list would say the configuration exists and
- * simply has no functions.</p>
+ * ListFunctionsByCodeSigningConfig derives its results from the function records carrying the
+ * configuration ARN. It answers a configuration that does not exist with a 404 rather than an
+ * empty list, because an empty list would say the configuration exists and simply has no functions.</p>
  *
  * <p>Nothing here verifies a signature. Lambda's own code signing checks are not emulated, so a
  * configuration never gates a deployment.</p>
@@ -64,14 +62,17 @@ public class LambdaCodeSigningConfigFunctionsController {
     private static final int MAX_ITEMS_MAX = 10000;
 
     private final LambdaCodeSigningConfigService service;
+    private final LambdaService lambdaService;
     private final RegionResolver regionResolver;
     private final ObjectMapper objectMapper;
 
     @Inject
     public LambdaCodeSigningConfigFunctionsController(LambdaCodeSigningConfigService service,
+                                                      LambdaService lambdaService,
                                                       RegionResolver regionResolver,
                                                       ObjectMapper objectMapper) {
         this.service = service;
+        this.lambdaService = lambdaService;
         this.regionResolver = regionResolver;
         this.objectMapper = objectMapper;
     }
@@ -89,14 +90,18 @@ public class LambdaCodeSigningConfigFunctionsController {
             @QueryParam("Marker") String marker,
             @QueryParam("MaxItems") String maxItems) {
         requireValidArn(codeSigningConfigArn);
-        parseMaxItems(maxItems);
-        // Resolving the config is what turns an unknown ARN into the 404. A known one has no
-        // functions, since PutFunctionCodeSigningConfig is not implemented, so Marker addresses a
-        // page past the end and NextMarker is never emitted.
-        service.get(regionResolver.resolveRegion(headers), codeSigningConfigArn);
+        Integer requested = maxItems == null || maxItems.isBlank() ? null : parseMaxItems(maxItems);
+        String region = regionResolver.resolveRegion(headers);
+        String accountId = regionResolver.getAccountId();
+        service.get(region, accountId, codeSigningConfigArn);
+        PaginatedResult<String> page = lambdaService.listFunctionsByCodeSigningConfig(
+                region, accountId, codeSigningConfigArn, requested, marker);
 
         ObjectNode root = objectMapper.createObjectNode();
-        root.putArray("FunctionArns");
+        root.set("FunctionArns", objectMapper.valueToTree(page.items()));
+        if (page.nextToken() != null) {
+            root.put("NextMarker", page.nextToken());
+        }
         return Response.ok(root).build();
     }
 
@@ -114,7 +119,8 @@ public class LambdaCodeSigningConfigFunctionsController {
     public Response getCodeSigningConfig(@Context HttpHeaders headers,
                                          @PathParam("codeSigningConfigArn") String codeSigningConfigArn) {
         requireValidArn(codeSigningConfigArn);
-        return Response.ok(wrap(service.get(regionResolver.resolveRegion(headers), codeSigningConfigArn))).build();
+        String region = regionResolver.resolveRegion(headers);
+        return Response.ok(wrap(service.get(region, regionResolver.getAccountId(), codeSigningConfigArn))).build();
     }
 
     @PUT
@@ -123,9 +129,13 @@ public class LambdaCodeSigningConfigFunctionsController {
                                             @PathParam("codeSigningConfigArn") String codeSigningConfigArn,
                                             ObjectNode body) {
         requireValidArn(codeSigningConfigArn);
-        CodeSigningConfig config = service.update(regionResolver.resolveRegion(headers), codeSigningConfigArn,
-                text(body, "Description"), allowedPublishers(body), policies(body));
-        return Response.ok(wrap(config)).build();
+        String region = regionResolver.resolveRegion(headers);
+        return service.withConfigLock(codeSigningConfigArn, () -> {
+            service.get(region, regionResolver.getAccountId(), codeSigningConfigArn);
+            CodeSigningConfig config = service.update(region, codeSigningConfigArn,
+                    text(body, "Description"), allowedPublishers(body), policies(body));
+            return Response.ok(wrap(config)).build();
+        });
     }
 
     @DELETE
@@ -133,8 +143,19 @@ public class LambdaCodeSigningConfigFunctionsController {
     public Response deleteCodeSigningConfig(@Context HttpHeaders headers,
                                             @PathParam("codeSigningConfigArn") String codeSigningConfigArn) {
         requireValidArn(codeSigningConfigArn);
-        service.delete(regionResolver.resolveRegion(headers), codeSigningConfigArn);
-        return Response.noContent().build();
+        String region = regionResolver.resolveRegion(headers);
+        String accountId = regionResolver.getAccountId();
+        return service.withConfigLock(codeSigningConfigArn, () -> {
+            service.get(region, accountId, codeSigningConfigArn);
+            PaginatedResult<String> attached = lambdaService.listFunctionsByCodeSigningConfig(
+                    region, accountId, codeSigningConfigArn, 1, null);
+            if (!attached.items().isEmpty()) {
+                throw new AwsException("ResourceConflictException",
+                        "The code signing configuration is still attached to a function.", 409);
+            }
+            service.delete(region, codeSigningConfigArn);
+            return Response.noContent().build();
+        });
     }
 
     @GET
