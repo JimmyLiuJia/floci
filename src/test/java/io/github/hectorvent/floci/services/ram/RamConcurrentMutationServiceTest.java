@@ -7,6 +7,8 @@ import io.github.hectorvent.floci.core.storage.StorageFactory;
 import io.github.hectorvent.floci.services.ram.model.ResourceShare;
 import org.junit.jupiter.api.Test;
 
+import java.lang.management.ManagementFactory;
+import java.lang.management.ThreadInfo;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -16,6 +18,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Predicate;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -36,26 +39,35 @@ class RamConcurrentMutationServiceTest {
         storage.armShareScans();
 
         ExecutorService executor = Executors.newFixedThreadPool(2);
-        CountDownLatch workersReady = new CountDownLatch(2);
-        CountDownLatch start = new CountDownLatch(1);
+        AtomicReference<Thread> disassociateThread = new AtomicReference<>();
+        AtomicReference<Thread> tagThread = new AtomicReference<>();
         try {
             Future<?> disassociate = executor.submit(() -> {
-                workersReady.countDown();
-                await(start);
+                disassociateThread.set(Thread.currentThread());
                 service.disassociateResourceShare(share.getResourceShareArn(),
                         List.of(RESOURCE_ARN), List.of(), OWNER, "us-east-1");
             });
+            assertTrue(storage.shareStorage.firstScanEntered.await(5, TimeUnit.SECONDS),
+                    "the disassociation must reach its share scan");
             Future<?> tag = executor.submit(() -> {
-                workersReady.countDown();
-                await(start);
+                tagThread.set(Thread.currentThread());
                 service.tagResource(share.getResourceShareArn(), Map.of("race", "preserve"),
                         OWNER, "us-east-1");
             });
-            assertTrue(workersReady.await(5, TimeUnit.SECONDS), "both workers must reach the start gate");
-            start.countDown();
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (storage.shareStorage.releaseFirstScan.getCount() != 0
+                    && !blockedOn(tagThread.get(), disassociateThread.get())
+                    && System.nanoTime() < deadline) {
+                Thread.sleep(1);
+            }
+            assertTrue(storage.shareStorage.releaseFirstScan.getCount() == 0
+                            || blockedOn(tagThread.get(), disassociateThread.get()),
+                    "the tag worker must scan or block on the service lock");
+            storage.shareStorage.releaseFirstScan.countDown();
             disassociate.get(15, TimeUnit.SECONDS);
             tag.get(15, TimeUnit.SECONDS);
         } finally {
+            storage.shareStorage.releaseFirstScan.countDown();
             executor.shutdownNow();
         }
 
@@ -66,13 +78,13 @@ class RamConcurrentMutationServiceTest {
                 "the tag must survive the concurrent disassociation");
     }
 
-    private static void await(CountDownLatch start) {
-        try {
-            assertTrue(start.await(5, TimeUnit.SECONDS));
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new AssertionError("worker interrupted", e);
+    private static boolean blockedOn(Thread waiter, Thread owner) {
+        if (waiter == null || owner == null) {
+            return false;
         }
+        ThreadInfo info = ManagementFactory.getThreadMXBean().getThreadInfo(waiter.threadId());
+        return info != null && info.getThreadState() == Thread.State.BLOCKED
+                && info.getLockOwnerId() == owner.threadId();
     }
 
     private static final class CoordinatedStorageFactory extends StorageFactory {
@@ -103,25 +115,30 @@ class RamConcurrentMutationServiceTest {
 
     private static final class CoordinatedStorage extends InMemoryStorage<String, Object> {
         private final AtomicInteger coordinatedScans = new AtomicInteger();
-        private volatile CountDownLatch scanGate = new CountDownLatch(0);
+        private volatile CountDownLatch firstScanEntered = new CountDownLatch(0);
+        private volatile CountDownLatch releaseFirstScan = new CountDownLatch(0);
 
         private void armScans() {
             coordinatedScans.set(0);
-            scanGate = new CountDownLatch(2);
+            firstScanEntered = new CountDownLatch(1);
+            releaseFirstScan = new CountDownLatch(1);
         }
 
         @Override
         public List<Object> scan(Predicate<String> keyFilter) {
             List<Object> snapshot = super.scan(keyFilter);
-            if (coordinatedScans.incrementAndGet() <= 2) {
-                CountDownLatch gate = scanGate;
-                gate.countDown();
+            int scanNumber = coordinatedScans.incrementAndGet();
+            if (scanNumber == 1) {
+                firstScanEntered.countDown();
                 try {
-                    gate.await(5, TimeUnit.SECONDS);
+                    assertTrue(releaseFirstScan.await(5, TimeUnit.SECONDS),
+                            "the first share scan must be released");
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     throw new AssertionError("share scan interrupted", e);
                 }
+            } else if (scanNumber == 2) {
+                releaseFirstScan.countDown();
             }
             return snapshot;
         }
