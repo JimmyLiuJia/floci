@@ -197,6 +197,29 @@ class PaginationTest {
     }
 
     @Test
+    void unencodedPagingReturnsTheRawCursorAndResumesAfterItIsDeleted() {
+        PaginatedResult<String> first = Pagination.paginateUnencoded(ITEMS, Function.identity(),
+                1, null, 2, 3, 128, "InvalidInput");
+        assertThat(first.items(), contains("a"));
+        assertEquals("a", first.nextToken());
+
+        PaginatedResult<String> rest = Pagination.paginateUnencoded(List.of("b", "c"),
+                Function.identity(), 1, first.nextToken(), 2, 3, 128, "InvalidInput");
+        assertThat(rest.items(), contains("b"));
+        assertEquals("b", rest.nextToken());
+    }
+
+    @Test
+    void unencodedPagingValidatesBoundsAndTokenLength() {
+        assertInvalid(() -> Pagination.paginateUnencoded(ITEMS, Function.identity(),
+                0, null, 2, 3, 128, "InvalidInput"));
+        assertInvalid(() -> Pagination.paginateUnencoded(ITEMS, Function.identity(),
+                1, "", 2, 3, 128, "InvalidInput"));
+        assertInvalid(() -> Pagination.paginateUnencoded(ITEMS, Function.identity(),
+                1, "x".repeat(129), 2, 3, 128, "InvalidInput"));
+    }
+
+    @Test
     void jsonPageSize_preservesOmittedNullZeroAndIntegerValues() throws Exception {
         for (String field : List.of("MaxResults", "PageSize")) {
             assertNull(Pagination.parseMaxResults(MAPPER.readTree("{}"), field, "InvalidInput"));

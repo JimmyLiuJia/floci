@@ -39,15 +39,11 @@ class KinesisAnalyticsV2JsonHandlerTest {
     }
 
     private void createApplication(String name) {
-        createApplication(name, REGION);
-    }
-
-    private void createApplication(String name, String region) {
         ObjectNode req = MAPPER.createObjectNode();
         req.put("ApplicationName", name);
         req.put("RuntimeEnvironment", "FLINK-1_18");
         req.put("ServiceExecutionRole", ROLE);
-        assertThat(handler.handle("CreateApplication", req, region).getStatus(), is(200));
+        assertThat(handler.handle("CreateApplication", req, REGION).getStatus(), is(200));
     }
 
     @Test
@@ -118,13 +114,37 @@ class KinesisAnalyticsV2JsonHandlerTest {
         assertEquals(longName, firstPage.get("ApplicationSummaries").get(0).get("ApplicationName").asText());
         assertThat(firstPage.hasNonNull("NextToken"), is(true));
         String token = firstPage.get("NextToken").asText();
-        assertThat(token.length() <= 128, is(true));
+        assertEquals(longName, token);
 
         createApplication("a0");
         ObjectNode secondRequest = MAPPER.createObjectNode().put("Limit", 1).put("NextToken", token);
         ObjectNode secondPage = entity(handler.handle("ListApplications", secondRequest, REGION));
         assertEquals("demo-b", secondPage.get("ApplicationSummaries").get(0).get("ApplicationName").asText());
         assertThat(secondPage.has("NextToken"), is(false));
+    }
+
+    @Test
+    void listApplicationsContinuesAfterTheLastReturnedApplicationIsDeleted() {
+        createApplication("demo-a");
+        createApplication("demo-b");
+
+        ObjectNode firstPage = entity(handler.handle("ListApplications",
+                MAPPER.createObjectNode().put("Limit", 1), REGION));
+        String firstName = firstPage.get("ApplicationSummaries").get(0).get("ApplicationName").asText();
+        String token = firstPage.get("NextToken").asText();
+        assertEquals(firstName, token);
+
+        ObjectNode describe = MAPPER.createObjectNode().put("ApplicationName", firstName);
+        double createTimestamp = entity(handler.handle("DescribeApplication", describe, REGION))
+                .get("ApplicationDetail").get("CreateTimestamp").asDouble();
+        ObjectNode delete = MAPPER.createObjectNode()
+                .put("ApplicationName", firstName)
+                .put("CreateTimestamp", createTimestamp);
+        assertThat(handler.handle("DeleteApplication", delete, REGION).getStatus(), is(200));
+
+        ObjectNode secondPage = entity(handler.handle("ListApplications",
+                MAPPER.createObjectNode().put("Limit", 1).put("NextToken", token), REGION));
+        assertEquals("demo-b", secondPage.get("ApplicationSummaries").get(0).get("ApplicationName").asText());
     }
 
     @Test
@@ -154,26 +174,11 @@ class KinesisAnalyticsV2JsonHandlerTest {
                     MAPPER.createObjectNode().put("Limit", limit), REGION));
             assertEquals("InvalidRequestException", error.getErrorCode());
         }
-        for (String token : new String[]{"", "not-a-token", "x".repeat(129)}) {
+        for (String token : new String[]{"", "!", "x".repeat(129)}) {
             AwsException error = assertThrows(AwsException.class, () -> handler.handle("ListApplications",
                     MAPPER.createObjectNode().put("NextToken", token), REGION));
             assertEquals("InvalidRequestException", error.getErrorCode());
         }
-    }
-
-    @Test
-    void listApplicationsRejectsTokenFromAnotherRegion() {
-        createApplication("demo-a", REGION);
-        createApplication("demo-b", REGION);
-        createApplication("demo-a", "us-west-2");
-        createApplication("demo-b", "us-west-2");
-
-        ObjectNode firstPage = entity(handler.handle("ListApplications",
-                MAPPER.createObjectNode().put("Limit", 1), REGION));
-        String token = firstPage.get("NextToken").asText();
-        AwsException error = assertThrows(AwsException.class, () -> handler.handle("ListApplications",
-                MAPPER.createObjectNode().put("Limit", 1).put("NextToken", token), "us-west-2"));
-        assertEquals("InvalidRequestException", error.getErrorCode());
     }
 
     @Test

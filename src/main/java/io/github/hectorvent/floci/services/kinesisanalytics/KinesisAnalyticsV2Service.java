@@ -4,8 +4,8 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import io.github.hectorvent.floci.config.EmulatorConfig;
 import io.github.hectorvent.floci.core.common.AwsArnUtils;
 import io.github.hectorvent.floci.core.common.AwsException;
-import io.github.hectorvent.floci.core.common.Digests;
 import io.github.hectorvent.floci.core.common.PaginatedResult;
+import io.github.hectorvent.floci.core.common.Pagination;
 import io.github.hectorvent.floci.core.common.RegionResolver;
 import io.github.hectorvent.floci.core.common.docker.ContainerStorageHelper;
 import io.github.hectorvent.floci.core.storage.AccountAwareStorageBackend;
@@ -24,7 +24,6 @@ import org.jboss.logging.Logger;
 
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -249,37 +248,11 @@ public class KinesisAnalyticsV2Service {
     }
 
     public PaginatedResult<FlinkApplication> listApplications(String region, Integer limit, String nextToken) {
-        if (limit != null && (limit < 1 || limit > 50)) {
-            throw new AwsException("InvalidRequestException", "Limit must be between 1 and 50.", 400);
-        }
-        if (nextToken != null && (nextToken.isEmpty() || nextToken.length() > 128)) {
+        if (nextToken != null && !nextToken.isEmpty() && !APPLICATION_NAME.matcher(nextToken).matches()) {
             throw new AwsException("InvalidRequestException", "Invalid NextToken.", 400);
         }
-
-        List<FlinkApplication> applications = new ArrayList<>(listApplications(region));
-        applications.sort(Comparator.comparing(FlinkApplication::getApplicationName));
-        // Hash the scoped cursor so a 128-character application name still yields a valid NextToken.
-        String scope = regionResolver.getAccountId() + ":" + region + ":";
-        int start = 0;
-        if (nextToken != null) {
-            boolean found = false;
-            for (int i = 0; i < applications.size(); i++) {
-                if (nextToken.equals(Digests.sha256Hex(scope + applications.get(i).getApplicationName()))) {
-                    start = i + 1;
-                    found = true;
-                    break;
-                }
-            }
-            if (!found) {
-                throw new AwsException("InvalidRequestException", "Invalid NextToken.", 400);
-            }
-        }
-
-        int end = Math.min(start + (limit == null ? 50 : limit), applications.size());
-        List<FlinkApplication> page = applications.subList(start, end);
-        String token = end < applications.size()
-                ? Digests.sha256Hex(scope + page.get(page.size() - 1).getApplicationName()) : null;
-        return new PaginatedResult<>(page, token);
+        return Pagination.paginateUnencoded(listApplications(region), FlinkApplication::getApplicationName,
+                limit, nextToken, 50, 50, 128, "InvalidRequestException");
     }
 
     public FlinkApplication startApplication(String applicationName) {

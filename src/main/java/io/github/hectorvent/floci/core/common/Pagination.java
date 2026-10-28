@@ -138,6 +138,27 @@ public final class Pagination {
                 token -> new AwsException(errorCode, "Invalid pagination token.", 400));
     }
 
+    /**
+     * Paginates a list whose cursor is itself a valid API token. Unlike the namespaced overloads,
+     * this leaves the sorted cursor unencoded in the response, so an API whose resource name is
+     * also its token can resume after that resource has been removed.
+     */
+    public static <T> PaginatedResult<T> paginateUnencoded(List<T> all, Function<T, String> cursorOf,
+                                                            Integer maxResults, String nextToken,
+                                                            int defaultPageSize, int maxResultsLimit,
+                                                            int maxTokenLength, String errorCode) {
+        if (maxResults != null && (maxResults < 1 || maxResults > maxResultsLimit)) {
+            throw new AwsException(errorCode,
+                    "Page size must be between 1 and " + maxResultsLimit + ".", 400);
+        }
+        if (nextToken != null && (nextToken.isEmpty() || nextToken.length() > maxTokenLength)) {
+            throw new AwsException(errorCode,
+                    "Pagination token must be between 1 and " + maxTokenLength + " characters.", 400);
+        }
+        int limit = maxResults == null ? defaultPageSize : maxResults;
+        return slice(all, cursorOf, limit, nextToken, "", Function.identity());
+    }
+
     /** Reads an optional JSON page size without coercing strings, fractions, or overflowing integers. */
     public static Integer parseMaxResults(JsonNode request, String field, String errorCode) {
         JsonNode value = request.get(field);
