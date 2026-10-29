@@ -1,19 +1,15 @@
 package io.github.hectorvent.floci.services.route53;
 
 import io.github.hectorvent.floci.services.route53.model.HostedZone;
+import io.github.hectorvent.floci.testing.AwsTestClients;
 import io.quarkus.test.junit.QuarkusTest;
-import io.restassured.RestAssured;
 import io.restassured.path.xml.XmlPath;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.Test;
-import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
-import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
-import software.amazon.awssdk.http.urlconnection.UrlConnectionHttpClient;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.route53.Route53Client;
 import software.amazon.awssdk.services.route53.model.ListHostedZonesResponse;
 
-import java.net.URI;
 import java.util.List;
 
 import static io.restassured.RestAssured.given;
@@ -99,12 +95,7 @@ class Route53HostedZonesPaginationIntegrationTest {
             assertEquals(List.of(firstZoneId, secondZoneId).stream().sorted().toList(),
                     expected.stream().map(HostedZone::getId)
                             .filter(id -> id.equals(firstZoneId) || id.equals(createdSecondZoneId)).toList());
-            try (Route53Client client = Route53Client.builder()
-                    .endpointOverride(URI.create("http://localhost:" + RestAssured.port))
-                    .httpClientBuilder(UrlConnectionHttpClient.builder())
-                    .region(Region.US_EAST_1)
-                    .credentialsProvider(StaticCredentialsProvider.create(AwsBasicCredentials.create("test", "test")))
-                    .build()) {
+            try (Route53Client client = AwsTestClients.create(Route53Client.builder(), "test", Region.US_EAST_1)) {
                 List<ListHostedZonesResponse> pages = client.listHostedZonesPaginator(request -> request.maxItems("1"))
                         .stream().toList();
                 assertEquals(expected.size(), pages.size());

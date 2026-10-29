@@ -25,7 +25,6 @@ import jakarta.ws.rs.core.Response;
 
 import javax.xml.stream.XMLStreamConstants;
 import javax.xml.stream.XMLStreamReader;
-
 import java.net.URI;
 import java.time.Instant;
 import java.util.ArrayList;
