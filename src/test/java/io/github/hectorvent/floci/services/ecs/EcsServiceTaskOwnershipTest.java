@@ -261,6 +261,8 @@ class EcsServiceTaskOwnershipTest {
         service.reconcileServices();
         assertEquals("RUNNING", reload(service, oldTask).getLastStatus());
         assertEquals(1, ownedTasks(service, "daemon-protected", "agent").size());
+        assertEquals(1, service.describeServices("daemon-protected", List.of("agent"), REGION)
+                .getFirst().getRunningCount());
 
         service.updateTaskProtection("daemon-protected", List.of(oldTask.getTaskArn()), false, null, REGION);
         service.reconcileServices();

@@ -5188,6 +5188,8 @@ public class EcsService implements ContainerTeardown, ResourceProvider, Resettab
                 }
                 if (TaskStatus.STOPPED.name().equals(t.getLastStatus())) {
                     covered.remove(instanceArn);
+                } else if (TaskStatus.RUNNING.name().equals(t.getLastStatus())) {
+                    running++;
                 }
                 continue;
             }
