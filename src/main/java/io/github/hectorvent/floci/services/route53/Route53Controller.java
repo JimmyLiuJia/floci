@@ -512,8 +512,11 @@ public class Route53Controller {
     public Response listHealthChecks(@QueryParam("marker") String marker,
                                       @QueryParam("maxitems") @DefaultValue("100") int maxItems) {
         try {
-            List<HealthCheck> checks = service.listHealthChecks(marker, maxItems);
-            boolean truncated = checks.size() == maxItems;
+            int pageSize = Math.min(maxItems, 1000);
+            int lookaheadLimit = pageSize > 0 ? pageSize + 1 : pageSize;
+            List<HealthCheck> remaining = service.listHealthChecks(marker, lookaheadLimit);
+            boolean truncated = pageSize > 0 && remaining.size() > pageSize;
+            List<HealthCheck> checks = truncated ? remaining.subList(0, pageSize) : remaining;
 
             XmlBuilder xml = new XmlBuilder()
                     .start("ListHealthChecksResponse", NS)
@@ -523,8 +526,11 @@ public class Route53Controller {
             }
             xml.end("HealthChecks")
                .elem("Marker", marker != null ? marker : "")
-               .elem("IsTruncated", String.valueOf(truncated))
-               .elem("MaxItems", String.valueOf(maxItems))
+               .elem("IsTruncated", String.valueOf(truncated));
+            if (truncated) {
+                xml.elem("NextMarker", remaining.get(pageSize).getId());
+            }
+            xml.elem("MaxItems", String.valueOf(maxItems))
                .end("ListHealthChecksResponse");
 
             return Response.ok(xml.build(), XML).build();

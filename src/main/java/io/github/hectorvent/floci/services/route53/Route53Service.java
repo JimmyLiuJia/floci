@@ -505,11 +505,12 @@ public class Route53Service implements Resettable {
 
     public List<HealthCheck> listHealthChecks(String marker, int maxItems) {
         List<HealthCheck> all = new ArrayList<>(healthCheckStore.scan(k -> true));
+        all.sort(Comparator.comparing(HealthCheck::getId));
         if (marker != null && !marker.isEmpty()) {
             int idx = 0;
             for (int i = 0; i < all.size(); i++) {
                 if (all.get(i).getId().equals(marker)) {
-                    idx = i + 1;
+                    idx = i;
                     break;
                 }
             }
