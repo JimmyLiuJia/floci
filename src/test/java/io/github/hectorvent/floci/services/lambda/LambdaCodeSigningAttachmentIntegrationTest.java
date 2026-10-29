@@ -39,9 +39,7 @@ class LambdaCodeSigningAttachmentIntegrationTest {
                     .body("CodeSigningConfigArn", is(arn))
                     .body("FunctionName", is(functionName));
             given().when().get(functionPath + "/code-signing-config")
-                    .then().statusCode(200)
-                    .body("CodeSigningConfigArn", is(arn))
-                    .body("FunctionName", is(functionName));
+                    .then().statusCode(404);
 
             given().queryParam("MaxItems", 1)
                     .when().get(CONFIGS + "/" + arn + "/functions")
@@ -104,11 +102,22 @@ class LambdaCodeSigningAttachmentIntegrationTest {
                             + "\"Handler\":\"index.handler\",\"CodeSigningConfigArn\":\"" + arn + "\"}")
                     .when().post(LEGACY_FUNCTIONS)
                     .then().statusCode(201)
-                    .body("CodeSigningConfigArn", is(arn));
+                    .body("CodeSigningConfigArn", nullValue());
 
             given().when().get(SIGNING + "/functions/" + functionName + "/code-signing-config")
                     .then().statusCode(200)
                     .body("CodeSigningConfigArn", is(arn));
+            given().when().get(LEGACY_FUNCTIONS + "/" + functionName + "/configuration")
+                    .then().statusCode(200)
+                    .body("CodeSigningConfigArn", nullValue());
+            given().when().get(functionPath)
+                    .then().statusCode(200)
+                    .body("Configuration.CodeSigningConfigArn", nullValue());
+            given().when().get(LEGACY_FUNCTIONS)
+                    .then().statusCode(200)
+                    .body("Functions.FunctionName", hasItem(functionName))
+                    .body("Functions.find { it.FunctionName == '" + functionName
+                            + "' }.CodeSigningConfigArn", nullValue());
         } finally {
             given().when().delete(functionPath).then().statusCode(204);
             given().when().delete(CONFIGS + "/" + arn).then().statusCode(204);

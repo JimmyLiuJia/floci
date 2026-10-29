@@ -227,21 +227,6 @@ public class LambdaController {
         return Response.noContent().build();
     }
 
-    // ──────────────────────────── GetFunctionCodeSigningConfig ────────────────────────────
-
-    @GET
-    @Path("/functions/{functionName}/code-signing-config")
-    public Response getFunctionCodeSigningConfig(@Context HttpHeaders headers,
-                                                  @PathParam("functionName") String functionName) {
-        String region = regionResolver.resolveRegion(headers);
-        LambdaFunction fn = lambdaService.getFunctionForCodeSigningConfig(region, functionName);
-        ObjectNode root = objectMapper.createObjectNode();
-        root.put("CodeSigningConfigArn", fn.getCodeSigningConfigArn() == null
-                ? "" : fn.getCodeSigningConfigArn());
-        root.put("FunctionName", fn.getFunctionName());
-        return Response.ok(root).build();
-    }
-
     // ──────────────────────────── Invoke ────────────────────────────
 
     private static final int SYNC_REQUEST_LIMIT  = 6 * 1024 * 1024;
@@ -799,11 +784,6 @@ public class LambdaController {
         // KMSKeyArn — only when set
         if (fn.getKmsKeyArn() != null) {
             node.put("KMSKeyArn", fn.getKmsKeyArn());
-        }
-
-        // CodeSigningConfigArn — only when set
-        if (fn.getCodeSigningConfigArn() != null) {
-            node.put("CodeSigningConfigArn", fn.getCodeSigningConfigArn());
         }
 
         if (fn.getFileSystemConfigs() != null && !fn.getFileSystemConfigs().isEmpty()) {

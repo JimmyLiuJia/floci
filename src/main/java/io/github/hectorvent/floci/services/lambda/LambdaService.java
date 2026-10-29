@@ -719,6 +719,16 @@ public class LambdaService implements ResourceProvider {
     /** Attaches or replaces a code-signing configuration on the function's {@code $LATEST}. */
     public LambdaFunction putFunctionCodeSigningConfig(String region, String functionName,
                                                        String codeSigningConfigArn) {
+        return updateFunctionCodeSigningConfig(region, functionName, codeSigningConfigArn);
+    }
+
+    /** Removes a code-signing configuration from the function's {@code $LATEST}. */
+    public void deleteFunctionCodeSigningConfig(String region, String functionName) {
+        updateFunctionCodeSigningConfig(region, functionName, null);
+    }
+
+    private LambdaFunction updateFunctionCodeSigningConfig(String region, String functionName,
+                                                           String codeSigningConfigArn) {
         String name = codeSigningFunctionName(region, functionName);
         String functionArn = regionResolver.buildArn("lambda", region, "function:" + name);
         synchronized (lockForConcurrencyOp(functionArn)) {
@@ -732,22 +742,6 @@ public class LambdaService implements ResourceProvider {
             // the caller's partition instead of falling back to the default account.
             functionStore.saveForAccount(regionResolver.getAccountId(), region, function);
             return function;
-        }
-    }
-
-    /** Removes a code-signing configuration from the function's {@code $LATEST}. */
-    public void deleteFunctionCodeSigningConfig(String region, String functionName) {
-        String name = codeSigningFunctionName(region, functionName);
-        String functionArn = regionResolver.buildArn("lambda", region, "function:" + name);
-        synchronized (lockForConcurrencyOp(functionArn)) {
-            LambdaFunction function = getFunctionForCodeSigningConfig(region, functionName);
-            function.setAccountId(regionResolver.getAccountId());
-            function.setCodeSigningConfigArn(null);
-            function.setLastModified(System.currentTimeMillis());
-            function.setRevisionId(UUID.randomUUID().toString());
-            // See the PUT path above: legacy records can have a null accountId even after a
-            // caller-scoped lookup has established their owner.
-            functionStore.saveForAccount(regionResolver.getAccountId(), region, function);
         }
     }
 

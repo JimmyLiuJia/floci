@@ -8,7 +8,6 @@ import io.github.hectorvent.floci.core.storage.InMemoryStorage;
 import io.github.hectorvent.floci.services.lambda.model.LambdaFunction;
 import io.github.hectorvent.floci.services.lambda.zip.CodeStore;
 import io.github.hectorvent.floci.services.lambda.zip.ZipExtractor;
-import io.github.hectorvent.floci.services.s3.PreSignedUrlGenerator;
 import jakarta.ws.rs.core.Response;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -204,17 +203,12 @@ class LambdaCodeSigningAccountScopeTest {
         ObjectMapper mapper = new ObjectMapper();
         LambdaCodeSigningController controller = new LambdaCodeSigningController(
                 service, mock(LambdaCodeSigningConfigService.class), regions, mapper);
-        LambdaController lambdaController = new LambdaController(
-                service, regions, mapper, mock(PreSignedUrlGenerator.class));
         String foreignArn = "arn:aws:lambda:" + REGION + ":" + ARN_ACCOUNT
                 + ":function:" + FUNCTION_NAME;
 
         AwsException error = assertThrows(AwsException.class,
                 () -> controller.getFunctionCodeSigningConfig(null, foreignArn));
         assertEquals("ResourceNotFoundException", error.getErrorCode());
-        AwsException lambdaError = assertThrows(AwsException.class,
-                () -> lambdaController.getFunctionCodeSigningConfig(null, foreignArn));
-        assertEquals("ResourceNotFoundException", lambdaError.getErrorCode());
     }
 
     @Test
