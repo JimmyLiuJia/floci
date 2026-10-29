@@ -259,7 +259,7 @@ public class EcsService implements ContainerTeardown, ResourceProvider, Resettab
                 execSessions, discoveryRegistrar, cloudWatchMetricsService, Clock.systemUTC());
     }
 
-    /** With the clock that dates Container Insights samples, which a test pins. */
+    /** With the clock for Container Insights samples and task protection deadlines. */
     EcsService(RegionResolver regionResolver, EcsContainerManager containerManager,
                EmulatorConfig config, EcsLoadBalancerRegistrar lbRegistrar,
                StorageFactory storageFactory, EcsEventPublisher eventPublisher,
@@ -1984,6 +1984,14 @@ public class EcsService implements ContainerTeardown, ResourceProvider, Resettab
         }
     }
 
+    private void stopServiceTaskIfUnprotected(EcsTask task, String reason, String region) {
+        synchronized (task) {
+            if (!isTaskProtected(task, clock.instant())) {
+                stopTaskLocked(task, reason, STOP_CODE_SERVICE_SCHEDULER_INITIATED, region);
+            }
+        }
+    }
+
     private EcsTask stopTaskLocked(EcsTask task, String reason, String stopCode, String region) {
         if (TaskStatus.STOPPED.name().equals(task.getLastStatus())) {
             return task;
@@ -2502,7 +2510,7 @@ public class EcsService implements ContainerTeardown, ResourceProvider, Resettab
             synchronized (task) {
                 task.setProtectionEnabled(protectionEnabled);
                 Instant expiration = protectionEnabled
-                        ? Instant.now().plusSeconds((expiresInMinutes == null ? 120L : expiresInMinutes) * 60L)
+                        ? clock.instant().plusSeconds((expiresInMinutes == null ? 120L : expiresInMinutes) * 60L)
                         : null;
                 task.setProtectedUntil(expiration);
                 result.add(new ProtectedTask(task.getTaskArn(), protectionEnabled, expiration));
@@ -2516,7 +2524,7 @@ public class EcsService implements ContainerTeardown, ResourceProvider, Resettab
         for (String ref : taskRefs) {
             EcsTask task = resolveTaskOrThrow(ref, region);
             synchronized (task) {
-                result.add(new ProtectedTask(task.getTaskArn(), isTaskProtected(task, Instant.now()),
+                result.add(new ProtectedTask(task.getTaskArn(), isTaskProtected(task, clock.instant()),
                         task.getProtectedUntil()));
             }
         }
@@ -2537,13 +2545,13 @@ public class EcsService implements ContainerTeardown, ResourceProvider, Resettab
         return false;
     }
 
-    private static boolean isProtectedTask(EcsTask task) {
+    private boolean isProtectedTask(EcsTask task) {
         synchronized (task) {
-            return isTaskProtected(task, Instant.now());
+            return isTaskProtected(task, clock.instant());
         }
     }
 
-    private static boolean eligibleForServiceStop(EcsTask task) {
+    private boolean eligibleForServiceStop(EcsTask task) {
         return !isProtectedTask(task);
     }
 
@@ -4321,7 +4329,7 @@ public class EcsService implements ContainerTeardown, ResourceProvider, Resettab
                 .filter(t -> ownedBy(t, svc, cluster))
                 .filter(t -> TaskStatus.RUNNING.name().equals(t.getLastStatus()))
                 .filter(t -> isStaleForDeployment(t, currentDeploymentId, taskDefinitionArn))
-                .anyMatch(EcsService::isProtectedTask);
+                .anyMatch(this::isProtectedTask);
     }
 
     /**
@@ -5175,12 +5183,8 @@ public class EcsService implements ContainerTeardown, ResourceProvider, Resettab
                 // maximumPercent is 100 for DAEMON: the replacement starts once this is STOPPED.
                 if (!TaskStatus.STOPPING.name().equals(t.getLastStatus())) {
                     try {
-                        synchronized (t) {
-                            if (!isTaskProtected(t, Instant.now())) {
-                                stopTaskLocked(t, "Service deployment replaced task definition "
-                                        + t.getTaskDefinitionArn(), STOP_CODE_SERVICE_SCHEDULER_INITIATED, region);
-                            }
-                        }
+                        stopServiceTaskIfUnprotected(t, "Service deployment replaced task definition "
+                                + t.getTaskDefinitionArn(), region);
                     } catch (Exception e) {
                         LOG.warnv("Service reconciler failed to stop daemon task {0}: {1}",
                                 t.getTaskArn(), e.getMessage());
@@ -5490,22 +5494,17 @@ public class EcsService implements ContainerTeardown, ResourceProvider, Resettab
             // half of the rolling deployment. Protected stale tasks cannot displace the
             // desired number of current-revision tasks.
             int currentToStop = Math.max(0, (int) current - svc.getDesiredCount());
-            Stream.concat(staleTasks.stream().filter(EcsService::eligibleForServiceStop),
+            Stream.concat(staleTasks.stream().filter(this::eligibleForServiceStop),
                             runningTasks.stream()
                                     .filter(t -> !staleTasks.contains(t))
-                                    .filter(EcsService::eligibleForServiceStop)
+                                    .filter(this::eligibleForServiceStop)
                                     .limit(currentToStop))
                     .forEach(t -> {
                         boolean stale = staleTasks.contains(t);
                         try {
-                            synchronized (t) {
-                                if (!isTaskProtected(t, Instant.now())) {
-                                    stopTaskLocked(t,
-                                            stale ? "Service deployment replaced task definition "
-                                                    + t.getTaskDefinitionArn() : "Service scale-in",
-                                            STOP_CODE_SERVICE_SCHEDULER_INITIATED, region);
-                                }
-                            }
+                            stopServiceTaskIfUnprotected(t,
+                                    stale ? "Service deployment replaced task definition "
+                                            + t.getTaskDefinitionArn() : "Service scale-in", region);
                         } catch (Exception e) {
                             LOG.warnv("Service reconciler failed to stop task {0}: {1}",
                                     t.getTaskArn(), e.getMessage());

@@ -7,14 +7,18 @@ import io.github.hectorvent.floci.core.storage.AccountAwareStorageBackend;
 import io.github.hectorvent.floci.core.storage.StorageBackend;
 import io.github.hectorvent.floci.core.storage.StorageFactory;
 import io.github.hectorvent.floci.services.ecs.container.EcsContainerManager;
+import io.github.hectorvent.floci.services.ecs.exec.EcsExecSessionRegistry;
 import io.github.hectorvent.floci.services.ecs.model.ContainerDefinition;
 import io.github.hectorvent.floci.services.ecs.model.ContainerInstance;
 import io.github.hectorvent.floci.services.ecs.model.EcsServiceModel;
 import io.github.hectorvent.floci.services.ecs.model.EcsTask;
 import io.github.hectorvent.floci.services.ecs.model.LaunchType;
 import io.github.hectorvent.floci.services.ecs.model.ProtectedTask;
+import io.github.hectorvent.floci.testing.MutableClock;
 import org.junit.jupiter.api.Test;
 
+import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.List;
@@ -154,7 +158,8 @@ class EcsServiceTaskOwnershipTest {
 
     @Test
     void scaleInSkipsProtectedTaskAndStopsExpiredTaskOnNextTick() {
-        EcsService service = newMockModeService();
+        MutableClock clock = new MutableClock();
+        EcsService service = newMockModeService(clock);
         service.createCluster("mixed-cluster", REGION);
         registerTaskDef(service);
         service.createService("mixed-cluster", "worker", "own-fam", 2, LaunchType.FARGATE,
@@ -173,7 +178,7 @@ class EcsServiceTaskOwnershipTest {
         assertEquals("RUNNING", reload(service, protectedTask).getLastStatus());
         assertEquals("STOPPED", reload(service, unprotectedTask).getLastStatus());
 
-        protectedTask.setProtectedUntil(Instant.now().minusSeconds(1));
+        clock.advance(Duration.ofMinutes(61));
         service.updateService("mixed-cluster", "worker", null, 0, null, REGION);
         service.reconcileServices();
         assertEquals("STOPPED", reload(service, protectedTask).getLastStatus());
@@ -183,7 +188,8 @@ class EcsServiceTaskOwnershipTest {
 
     @Test
     void taskProtectionDefaultsToTwoHoursAndExplicitStopStillWorks() {
-        EcsService service = newMockModeService();
+        MutableClock clock = new MutableClock();
+        EcsService service = newMockModeService(clock);
         service.createCluster("default-cluster", REGION);
         registerTaskDef(service);
         service.createService("default-cluster", "worker", "own-fam", 1, LaunchType.FARGATE,
@@ -191,12 +197,13 @@ class EcsServiceTaskOwnershipTest {
         service.reconcileServices();
         EcsTask task = ownedTasks(service, "default-cluster", "worker").getFirst();
 
-        Instant before = Instant.now();
+        clock.reset();
+        Instant before = clock.instant();
+        clock.reset();
         ProtectedTask protection = service.updateTaskProtection("default-cluster", List.of(task.getTaskArn()),
                 true, null, REGION).getFirst();
         assertTrue(protection.protectionEnabled());
-        assertTrue(protection.expirationDate().isAfter(before.plusSeconds(119 * 60L)));
-        assertTrue(protection.expirationDate().isBefore(Instant.now().plusSeconds(121 * 60L)));
+        assertEquals(before.plus(Duration.ofMinutes(120)), protection.expirationDate());
         assertEquals(protection.expirationDate(), service.getTaskProtection("default-cluster",
                 List.of(task.getTaskArn()), REGION).getFirst().expirationDate());
 
@@ -423,10 +430,18 @@ class EcsServiceTaskOwnershipTest {
     }
 
     private static EcsService newMockModeService() {
-        return newMockModeService(null);
+        return newMockModeService(null, Clock.systemUTC());
     }
 
     private static EcsService newMockModeService(EcsEventPublisher publisher) {
+        return newMockModeService(publisher, Clock.systemUTC());
+    }
+
+    private static EcsService newMockModeService(Clock clock) {
+        return newMockModeService(null, clock);
+    }
+
+    private static EcsService newMockModeService(EcsEventPublisher publisher, Clock clock) {
         EmulatorConfig config = mock(EmulatorConfig.class, RETURNS_DEEP_STUBS);
         when(config.services().ecs().mock()).thenReturn(true);
         when(config.effectiveBaseUrl()).thenReturn("http://localhost:4566");
@@ -436,7 +451,7 @@ class EcsServiceTaskOwnershipTest {
                 config,
                 mock(EcsLoadBalancerRegistrar.class),
                 new InMemoryStorageFactory(),
-                publisher);
+                publisher, new EcsExecSessionRegistry(), null, null, clock);
         service.initializeStorage();
         return service;
     }
