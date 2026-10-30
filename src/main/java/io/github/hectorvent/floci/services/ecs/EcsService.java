@@ -3661,10 +3661,8 @@ public class EcsService implements ContainerTeardown, ResourceProvider, Resettab
         }
         LongPredicate query = containerInstanceCountFilter(filter);
         // Task transitions do not update ContainerInstance.runningTasksCount.
-        Map<String, Long> runningCounts = filter == null ? Map.of() : tasks.values().stream()
-                .filter(task -> cluster.getClusterArn().equals(task.getClusterArn()))
-                .filter(EcsService::countsTowardRunningTasks)
-                .collect(Collectors.groupingBy(EcsTask::getContainerInstanceArn, Collectors.counting()));
+        Map<String, Long> runningCounts = filter == null ? Map.of()
+                : runningTaskCountsForClusterArn(cluster.getClusterArn());
         String prefix = containerInstanceKey(cluster.getClusterArn(), "");
         List<String> arns = containerInstances.entrySet().stream()
                 .filter(e -> e.getKey().startsWith(prefix))
@@ -3688,6 +3686,17 @@ public class EcsService implements ContainerTeardown, ResourceProvider, Resettab
                 .filter(task -> clusterArn.equals(task.getClusterArn()))
                 .filter(task -> instanceArn.equals(task.getContainerInstanceArn()))
                 .count();
+    }
+
+    Map<String, Long> runningTaskCountsForCluster(String clusterRef, String region) {
+        return runningTaskCountsForClusterArn(resolveClusterOrDefault(clusterRef, region).getClusterArn());
+    }
+
+    private Map<String, Long> runningTaskCountsForClusterArn(String clusterArn) {
+        return tasks.values().stream()
+                .filter(task -> clusterArn.equals(task.getClusterArn()))
+                .filter(EcsService::countsTowardRunningTasks)
+                .collect(Collectors.groupingBy(EcsTask::getContainerInstanceArn, Collectors.counting()));
     }
 
     private static boolean countsTowardRunningTasks(EcsTask task) {

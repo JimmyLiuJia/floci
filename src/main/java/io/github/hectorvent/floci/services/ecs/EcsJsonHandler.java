@@ -918,10 +918,8 @@ public class EcsJsonHandler {
         EcsService.DescribeContainerInstancesResult found =
                 service.describeContainerInstancesDetailed(cluster, instanceRefs, region);
         ObjectNode resp = objectMapper.createObjectNode();
-        ArrayNode arr = objectMapper.createArrayNode();
-        found.instances().forEach(ci ->
-                arr.add(writer.containerInstanceNode(ci, cluster, region, includeTags, includeHealth)));
-        resp.set("containerInstances", arr);
+        resp.set("containerInstances", writer.containerInstanceNodes(
+                found.instances(), cluster, region, includeTags, includeHealth));
         ArrayNode failures = objectMapper.createArrayNode();
         found.failures().forEach(f -> failures.add(writer.failureNode(f)));
         resp.set("failures", failures);
@@ -962,9 +960,8 @@ public class EcsJsonHandler {
         EcsService.UpdateContainerInstancesStateResult updated =
                 service.updateContainerInstancesState(cluster, instanceRefs, status, region);
         ObjectNode resp = objectMapper.createObjectNode();
-        ArrayNode arr = objectMapper.createArrayNode();
-        updated.instances().forEach(ci -> arr.add(writer.containerInstanceNode(ci, cluster, region)));
-        resp.set("containerInstances", arr);
+        resp.set("containerInstances", writer.containerInstanceNodes(
+                updated.instances(), cluster, region, true, true));
         ArrayNode failures = objectMapper.createArrayNode();
         updated.failures().forEach(f -> failures.add(writer.failureNode(f)));
         resp.set("failures", failures);

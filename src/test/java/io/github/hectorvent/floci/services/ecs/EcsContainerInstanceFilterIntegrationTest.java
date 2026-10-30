@@ -4,8 +4,8 @@ import io.github.hectorvent.floci.services.ecs.model.EcsTask;
 import io.github.hectorvent.floci.testing.AwsTestClients;
 import io.github.hectorvent.floci.testing.RestAssuredJsonUtils;
 import io.quarkus.test.junit.QuarkusTest;
+import io.quarkus.test.junit.mockito.InjectSpy;
 import io.restassured.response.Response;
-import jakarta.inject.Inject;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import software.amazon.awssdk.regions.Region;
@@ -22,13 +22,17 @@ import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.notNullValue;
 import static org.hamcrest.Matchers.nullValue;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 
 @QuarkusTest
 class EcsContainerInstanceFilterIntegrationTest {
 
     private static final String TARGET = "AmazonEC2ContainerServiceV20141113.";
 
-    @Inject
+    @InjectSpy
     EcsService service;
 
     @BeforeAll
@@ -139,6 +143,31 @@ class EcsContainerInstanceFilterIntegrationTest {
         call("DescribeContainerInstances", "{\"cluster\":\"" + cluster
                 + "\",\"containerInstances\":[\"" + excluded + "\"]}")
                 .then().body("containerInstances[0].runningTasksCount", equalTo(0));
+    }
+
+    @Test
+    void describeContainerInstancesDoesNotScanTasksPerInstance() {
+        String cluster = "query-filter-describe-snapshot";
+        call("CreateCluster", "{\"clusterName\":\"" + cluster + "\"}");
+        String running = call("RegisterContainerInstance", "{\"cluster\":\"" + cluster + "\"}")
+                .jsonPath().getString("containerInstance.containerInstanceArn");
+        String idle = call("RegisterContainerInstance", "{\"cluster\":\"" + cluster + "\"}")
+                .jsonPath().getString("containerInstance.containerInstanceArn");
+        call("RegisterTaskDefinition", "{\"family\":\"query-filter-describe-task\","
+                + "\"containerDefinitions\":[{\"name\":\"app\",\"image\":\"nginx:latest\"}]}");
+        call("StartTask", "{\"cluster\":\"" + cluster + "\","
+                + "\"containerInstances\":[\"" + running + "\"],"
+                + "\"taskDefinition\":\"query-filter-describe-task\"}");
+
+        clearInvocations(service);
+        call("DescribeContainerInstances", "{\"cluster\":\"" + cluster
+                + "\",\"containerInstances\":[\"" + running + "\",\"" + idle + "\"]}")
+                .then().body("containerInstances", hasSize(2))
+                .body("containerInstances[0].runningTasksCount", equalTo(1))
+                .body("containerInstances[1].runningTasksCount", equalTo(0));
+        verify(service, never()).runningTaskCountForInstance(cluster, running, "us-east-1");
+        verify(service, never()).runningTaskCountForInstance(cluster, idle, "us-east-1");
+        verify(service, times(1)).runningTaskCountsForCluster(cluster, "us-east-1");
     }
 
     @Test
