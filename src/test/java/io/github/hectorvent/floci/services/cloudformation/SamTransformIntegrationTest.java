@@ -1,5 +1,7 @@
 package io.github.hectorvent.floci.services.cloudformation;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.hectorvent.floci.core.common.XmlParser;
 import io.github.hectorvent.floci.testing.RestAssuredJsonUtils;
 import io.quarkus.test.junit.QuarkusTest;
@@ -28,6 +30,7 @@ import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.notNullValue;
 import static org.hamcrest.Matchers.nullValue;
 import static org.hamcrest.Matchers.startsWith;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 @QuarkusTest
 class SamTransformIntegrationTest {
@@ -110,7 +113,7 @@ class SamTransformIntegrationTest {
     }
 
     @Test
-    void samAutoPublishAliasReferenceCreatesLambdaPermission() {
+    void samAutoPublishAliasReferenceCreatesLambdaPermission() throws Exception {
         String stackName = "sam-ref-alias-" + Long.toString(System.nanoTime(), 36);
         String functionName = stackName + "-fn";
         stacksToDelete.add(stackName);
@@ -159,6 +162,20 @@ class SamTransformIntegrationTest {
             .statusCode(200)
             .extract().asString();
         assertThat(stackXml, containsString(":function:" + functionName + ":live"));
+
+        String policyJson = given()
+        .when()
+            .get("/2015-03-31/functions/" + functionName + "/policy?Qualifier=live")
+        .then()
+            .statusCode(200)
+            .extract().path("Policy");
+        JsonNode statements = new ObjectMapper().readTree(policyJson).path("Statement");
+        assertEquals(1, statements.size());
+        JsonNode statement = statements.get(0);
+        assertEquals("lambda:InvokeFunction", statement.path("Action").asText());
+        assertEquals("events.amazonaws.com", statement.path("Principal").path("Service").asText());
+        assertEquals("arn:aws:lambda:us-east-1:000000000000:function:" + functionName + ":live",
+                statement.path("Resource").asText());
     }
 
     @Test
