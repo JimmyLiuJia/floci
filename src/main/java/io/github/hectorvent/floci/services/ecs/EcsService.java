@@ -3660,7 +3660,6 @@ public class EcsService implements ContainerTeardown, ResourceProvider, Resettab
                     "Invalid container instance status: " + status, 400);
         }
         LongPredicate query = containerInstanceCountFilter(filter);
-        // Task transitions do not update ContainerInstance.runningTasksCount.
         Map<String, Long> runningCounts = filter == null ? Map.of()
                 : runningTaskCountsForClusterArn(cluster.getClusterArn());
         String prefix = containerInstanceKey(cluster.getClusterArn(), "");
