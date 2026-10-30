@@ -163,6 +163,8 @@ class SamTransformIntegrationTest {
             .extract().asString();
         assertThat(stackXml, containsString(":function:" + functionName + ":live"));
 
+        String functionArn = given().when().get("/2015-03-31/functions/" + functionName)
+                .then().statusCode(200).extract().path("Configuration.FunctionArn");
         String policyJson = given()
         .when()
             .get("/2015-03-31/functions/" + functionName + "/policy?Qualifier=live")
@@ -174,8 +176,7 @@ class SamTransformIntegrationTest {
         JsonNode statement = statements.get(0);
         assertEquals("lambda:InvokeFunction", statement.path("Action").asText());
         assertEquals("events.amazonaws.com", statement.path("Principal").path("Service").asText());
-        assertEquals("arn:aws:lambda:us-east-1:000000000000:function:" + functionName + ":live",
-                statement.path("Resource").asText());
+        assertEquals(functionArn + ":live", statement.path("Resource").asText());
     }
 
     @Test
