@@ -32,6 +32,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Function;
+import java.util.function.Supplier;
 import java.util.regex.Pattern;
 
 /**
@@ -183,21 +185,13 @@ public class RamService {
                                                                  String name, List<String> resourceShareArns,
                                                                  String resourceShareStatus, String region,
                                                                  Integer maxResults, String nextToken) {
-        if (maxResults != null && (maxResults < 1 || maxResults > 500)) {
-            throw new AwsException("InvalidParameterException", "maxResults must be between 1 and 500.", 400);
-        }
-        if (nextToken != null && nextToken.isEmpty()) {
-            throw new AwsException("InvalidNextTokenException", "Invalid nextToken.", 400);
-        }
-
-        List<ResourceShare> shares = getResourceShares(callerAccountId, resourceOwner, name,
-                resourceShareArns, resourceShareStatus, region);
-        String namespace = "ram-resource-shares|" + callerAccountId + "|" + region + "|" + resourceOwner
-                + "|" + (name == null ? "~" : Base64Url.encode(name)) + "|" + resourceShareStatus + "|"
-                + resourceShareArns.stream().distinct().sorted().map(Base64Url::encode).toList();
-        return Pagination.paginate(shares, ResourceShare::getResourceShareArn,
-                maxResults != null ? maxResults : 100, nextToken, namespace,
-                ignored -> new AwsException("InvalidNextTokenException", "Invalid nextToken.", 400));
+        return paginateRamResults(
+                () -> getResourceShares(callerAccountId, resourceOwner, name,
+                        resourceShareArns, resourceShareStatus, region),
+                ResourceShare::getResourceShareArn, maxResults, nextToken,
+                () -> "ram-resource-shares|" + callerAccountId + "|" + region + "|" + resourceOwner
+                        + "|" + (name == null ? "~" : Base64Url.encode(name)) + "|" + resourceShareStatus + "|"
+                        + resourceShareArns.stream().distinct().sorted().map(Base64Url::encode).toList());
     }
 
     /**
@@ -459,41 +453,49 @@ public class RamService {
         if (resourceArn != null && !isValidArn(resourceArn)) {
             throw new AwsException("MalformedArnException", "Invalid resourceArn: " + resourceArn, 400);
         }
+        return paginateRamResults(() -> {
+            List<ResourceShareAssociation> associations = new ArrayList<>();
+            if (associationStatus == null || "ASSOCIATED".equals(associationStatus)) {
+                for (ResourceShare share : sharesIn(region)) {
+                    if (!isConsumableShare(share, callerAccountId, "SELF", resourceShareArns)) {
+                        continue;
+                    }
+                    if ("RESOURCE".equals(associationType)) {
+                        for (String entity : new LinkedHashSet<>(share.getResourceArns())) {
+                            if (resourceArn == null || resourceArn.equals(entity)) {
+                                associations.add(association(share, entity, "RESOURCE"));
+                            }
+                        }
+                    } else if ("PRINCIPAL".equals(associationType)) {
+                        for (String entity : new LinkedHashSet<>(share.getPrincipals())) {
+                            if (principal == null || principal.equals(entity)) {
+                                associations.add(association(share, entity, "PRINCIPAL"));
+                            }
+                        }
+                    }
+                }
+            }
+            return associations;
+        },
+                association -> association.resourceShareArn() + "\u0000" + association.associatedEntity(),
+                maxResults, nextToken,
+                () -> "ram-associations|" + callerAccountId + "|" + region + "|" + associationType
+                        + "|" + associationStatus + "|" + resourceShareArns.stream().sorted().toList()
+                        + "|" + resourceArn + "|" + principal);
+    }
+
+    private static <T> PaginatedResult<T> paginateRamResults(Supplier<List<T>> items,
+                                                               Function<T, String> cursorOf,
+                                                               Integer maxResults, String nextToken,
+                                                               Supplier<String> namespace) {
         if (maxResults != null && (maxResults < 1 || maxResults > 500)) {
             throw new AwsException("InvalidParameterException", "maxResults must be between 1 and 500.", 400);
         }
         if (nextToken != null && nextToken.isEmpty()) {
             throw new AwsException("InvalidNextTokenException", "Invalid nextToken.", 400);
         }
-
-        List<ResourceShareAssociation> associations = new ArrayList<>();
-        if (associationStatus == null || "ASSOCIATED".equals(associationStatus)) {
-            for (ResourceShare share : sharesIn(region)) {
-                if (!isConsumableShare(share, callerAccountId, "SELF", resourceShareArns)) {
-                    continue;
-                }
-                if ("RESOURCE".equals(associationType)) {
-                    for (String entity : new LinkedHashSet<>(share.getResourceArns())) {
-                        if (resourceArn == null || resourceArn.equals(entity)) {
-                            associations.add(association(share, entity, "RESOURCE"));
-                        }
-                    }
-                } else if ("PRINCIPAL".equals(associationType)) {
-                    for (String entity : new LinkedHashSet<>(share.getPrincipals())) {
-                        if (principal == null || principal.equals(entity)) {
-                            associations.add(association(share, entity, "PRINCIPAL"));
-                        }
-                    }
-                }
-            }
-        }
-
-        String namespace = "ram-associations|" + callerAccountId + "|" + region + "|" + associationType
-                + "|" + associationStatus + "|" + resourceShareArns.stream().sorted().toList()
-                + "|" + resourceArn + "|" + principal;
-        return Pagination.paginate(associations,
-                association -> association.resourceShareArn() + "\u0000" + association.associatedEntity(),
-                maxResults != null ? maxResults : 100, nextToken, namespace,
+        return Pagination.paginate(items.get(), cursorOf,
+                maxResults != null ? maxResults : 100, nextToken, namespace.get(),
                 ignored -> new AwsException("InvalidNextTokenException", "Invalid nextToken.", 400));
     }
 
