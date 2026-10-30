@@ -143,22 +143,19 @@ public class Route53Controller {
     public Response listHostedZones(@QueryParam("marker") String marker,
                                      @QueryParam("maxitems") @DefaultValue("100") int maxItems) {
         try {
-            int lookaheadLimit = maxItems > 0 && maxItems < Integer.MAX_VALUE ? maxItems + 1 : maxItems;
-            List<HostedZone> remaining = service.listHostedZones(marker, lookaheadLimit);
-            boolean truncated = maxItems > 0 && remaining.size() > maxItems;
-            List<HostedZone> zones = truncated ? remaining.subList(0, maxItems) : remaining;
+            Route53Pagination.Page<HostedZone> page = service.pageHostedZones(marker, maxItems);
 
             XmlBuilder xml = new XmlBuilder()
                     .start("ListHostedZonesResponse", NS)
                     .start("HostedZones");
-            for (HostedZone zone : zones) {
+            for (HostedZone zone : page.items()) {
                 xml.raw(xmlHostedZone(zone));
             }
             xml.end("HostedZones")
                .elem("Marker", marker != null ? marker : "")
-               .elem("IsTruncated", String.valueOf(truncated));
-            if (truncated) {
-                xml.elem("NextMarker", remaining.get(maxItems).getId());
+               .elem("IsTruncated", String.valueOf(page.isTruncated()));
+            if (page.isTruncated()) {
+                xml.elem("NextMarker", page.nextMarker());
             }
             xml.elem("MaxItems", String.valueOf(maxItems))
                .end("ListHostedZonesResponse");
@@ -513,22 +510,19 @@ public class Route53Controller {
                                       @QueryParam("maxitems") @DefaultValue("100") int maxItems) {
         try {
             int pageSize = Math.min(maxItems, 1000);
-            int lookaheadLimit = pageSize > 0 ? pageSize + 1 : pageSize;
-            List<HealthCheck> remaining = service.listHealthChecks(marker, lookaheadLimit);
-            boolean truncated = pageSize > 0 && remaining.size() > pageSize;
-            List<HealthCheck> checks = truncated ? remaining.subList(0, pageSize) : remaining;
+            Route53Pagination.Page<HealthCheck> page = service.pageHealthChecks(marker, pageSize);
 
             XmlBuilder xml = new XmlBuilder()
                     .start("ListHealthChecksResponse", NS)
                     .start("HealthChecks");
-            for (HealthCheck hc : checks) {
+            for (HealthCheck hc : page.items()) {
                 xml.raw(xmlHealthCheck(hc));
             }
             xml.end("HealthChecks")
                .elem("Marker", marker != null ? marker : "")
-               .elem("IsTruncated", String.valueOf(truncated));
-            if (truncated) {
-                xml.elem("NextMarker", remaining.get(pageSize).getId());
+               .elem("IsTruncated", String.valueOf(page.isTruncated()));
+            if (page.isTruncated()) {
+                xml.elem("NextMarker", page.nextMarker());
             }
             xml.elem("MaxItems", String.valueOf(maxItems))
                .end("ListHealthChecksResponse");
