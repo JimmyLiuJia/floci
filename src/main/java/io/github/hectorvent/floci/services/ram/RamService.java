@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import io.github.hectorvent.floci.core.common.AwsArnUtils;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.AwsPartitions;
+import io.github.hectorvent.floci.core.common.Base64Url;
 import io.github.hectorvent.floci.core.common.PaginatedResult;
 import io.github.hectorvent.floci.core.common.Pagination;
 import io.github.hectorvent.floci.core.storage.AccountAwareStorageBackend;
@@ -176,6 +177,27 @@ public class RamService {
             result.add(share);
         }
         return result;
+    }
+
+    public PaginatedResult<ResourceShare> getResourceSharesPage(String callerAccountId, String resourceOwner,
+                                                                 String name, List<String> resourceShareArns,
+                                                                 String resourceShareStatus, String region,
+                                                                 Integer maxResults, String nextToken) {
+        if (maxResults != null && (maxResults < 1 || maxResults > 500)) {
+            throw new AwsException("InvalidParameterException", "maxResults must be between 1 and 500.", 400);
+        }
+        if (nextToken != null && nextToken.isEmpty()) {
+            throw new AwsException("InvalidNextTokenException", "Invalid nextToken.", 400);
+        }
+
+        List<ResourceShare> shares = getResourceShares(callerAccountId, resourceOwner, name,
+                resourceShareArns, resourceShareStatus, region);
+        String namespace = "ram-resource-shares|" + callerAccountId + "|" + region + "|" + resourceOwner
+                + "|" + (name == null ? "~" : Base64Url.encode(name)) + "|" + resourceShareStatus + "|"
+                + resourceShareArns.stream().distinct().sorted().map(Base64Url::encode).toList();
+        return Pagination.paginate(shares, ResourceShare::getResourceShareArn,
+                maxResults != null ? maxResults : 100, nextToken, namespace,
+                ignored -> new AwsException("InvalidNextTokenException", "Invalid nextToken.", 400));
     }
 
     /**
