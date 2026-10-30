@@ -896,7 +896,7 @@ public class ServiceCatalogJsonHandler {
         record.put("ProductId", product.path("ProductId").asText());
         record.put("ProvisioningArtifactId", product.path("ProvisioningArtifactId").asText());
         record.put("Status", "SUCCEEDED");
-        record.put("CreatedTime", product.path("CreatedTime").asDouble(0.0));
+        record.put("CreatedTime", product.path("UpdatedTime").asDouble(0.0));
         record.put("UpdatedTime", product.path("UpdatedTime").asDouble(0.0));
         record.put("RecordType", "TERMINATE_PROVISIONED_PRODUCT");
         return Response.ok(objectMapper.createObjectNode().set("RecordDetail", record)).build();

@@ -72,7 +72,7 @@ The existing seeded Control Tower portfolio participates in pagination.
 | `DescribeProvisionedProduct` | Return a provisioned product's details. |
 | `DescribeProvisionedProductPlan` | Return a provisioned product plan's identity fields; no `Status` or `ResourceChanges` is reported. |
 | `DescribeProvisioningParameters` | Return the provisioning parameters recorded on the product at creation; the response is empty if none were supplied. |
-| `DescribeRecord` | Look up a record by id; `ProvisionProduct` and `ExecuteProvisionedProductPlan` return a `RecordId` they never persist, so those are not found. |
+| `DescribeRecord` | Look up a persisted record by id, including `ProvisionProduct` records; `ExecuteProvisionedProductPlan` returns an ID that is not persisted. |
 | `DescribeServiceActionExecutionParameters` | Return a service action's execution parameters; always an empty list. |
 | `DisableAWSOrganizationsAccess` | Accept the disable request without persisting any state. |
 | `DisassociateBudgetFromResource` | Remove a budget-name association from a resource. |
