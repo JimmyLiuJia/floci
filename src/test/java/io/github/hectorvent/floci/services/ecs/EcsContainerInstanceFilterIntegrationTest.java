@@ -1,12 +1,16 @@
 package io.github.hectorvent.floci.services.ecs;
 
 import io.github.hectorvent.floci.services.ecs.model.EcsTask;
+import io.github.hectorvent.floci.testing.AwsTestClients;
 import io.github.hectorvent.floci.testing.RestAssuredJsonUtils;
 import io.quarkus.test.junit.QuarkusTest;
 import io.restassured.response.Response;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import software.amazon.awssdk.regions.Region;
+import software.amazon.awssdk.services.ecs.EcsClient;
+import software.amazon.awssdk.services.ecs.model.ListContainerInstancesRequest;
 
 import java.util.List;
 import java.util.Set;
@@ -90,6 +94,10 @@ class EcsContainerInstanceFilterIntegrationTest {
                 + "\",\"filter\":\"runningTasksCount == 1\"}")
                 .then().body("containerInstanceArns", hasSize(1))
                 .body("containerInstanceArns[0]", equalTo(excluded));
+        try (EcsClient client = AwsTestClients.create(EcsClient.builder(), "test", Region.US_EAST_1)) {
+            assertEquals(List.of(excluded), client.listContainerInstances(ListContainerInstancesRequest.builder()
+                    .cluster(cluster).filter("runningTasksCount == 1").build()).containerInstanceArns());
+        }
 
         EcsTask taskModel = service.describeTasks(cluster, List.of(task), "us-east-1").getFirst();
         taskModel.setLastStatus("PENDING");
