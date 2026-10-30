@@ -6072,8 +6072,8 @@ public class S3Service implements Resettable, ResourceProvider {
         boolean enforced = ownershipIsEnforced(bucket);
         return !enforced && obj.getAcl() != null
                 ? obj.getAcl()
-                : defaultAclXml(enforced ? ownedObject.account()
-                        : objectOwnerAccount(obj, ownedObject.account()), DEFAULT_OWNER_DISPLAY_NAME);
+                : defaultAclXml(effectiveObjectOwnerAccount(obj, ownedObject.account(), enforced),
+                        DEFAULT_OWNER_DISPLAY_NAME);
     }
 
     public void putObjectAcl(String bucketName, String key, String versionId, String bodyAcl, String cannedAcl,
@@ -6086,7 +6086,7 @@ public class S3Service implements Resettable, ResourceProvider {
                     getStoredObjectEntry(bucketName, key, versionId);
             S3Object obj = ownedObject.value();
             rejectAclWhenOwnershipEnforced(bucket);
-            String resolvedAcl = resolveStoredObjectAclXml(objectOwnerAccount(obj, ownedObject.account()),
+            String resolvedAcl = resolveStoredObjectAclXml(effectiveObjectOwnerAccount(obj, ownedObject.account(), false),
                     ownedObject.account(), cannedAcl, grantRead,
                     grantWrite, grantFullControl, grantReadAcp, grantWriteAcp);
             String newAcl = resolvedAcl != null ? resolvedAcl : (bodyAcl.isBlank() ? null : bodyAcl);
@@ -6159,8 +6159,10 @@ public class S3Service implements Resettable, ResourceProvider {
         return writerAccount;
     }
 
-    private static String objectOwnerAccount(S3Object object, String bucketOwnerAccount) {
-        return object.getOwnerAccountId() != null ? object.getOwnerAccountId() : bucketOwnerAccount;
+    static String effectiveObjectOwnerAccount(S3Object object, String bucketOwnerAccount,
+                                              boolean ownershipEnforced) {
+        return ownershipEnforced || object.getOwnerAccountId() == null
+                ? bucketOwnerAccount : object.getOwnerAccountId();
     }
 
     /**

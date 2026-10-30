@@ -38,6 +38,11 @@ class S3OwnerIdentityIntegrationTest {
                 assertNull(client.listObjectsV2(request -> request.bucket(bucket).fetchOwner(false))
                         .contents().getFirst().owner());
 
+                Owner v1Owner = client.listObjects(request -> request.bucket(bucket))
+                        .contents().getFirst().owner();
+                assertNotNull(v1Owner);
+                assertEquals(AwsCanonicalUserId.forAccount("741624100001"), v1Owner.id());
+
                 Owner owner = client.listObjectsV2(request -> request.bucket(bucket).fetchOwner(true))
                         .contents().getFirst().owner();
                 assertNotNull(owner);

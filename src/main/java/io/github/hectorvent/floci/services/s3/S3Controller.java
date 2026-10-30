@@ -55,7 +55,6 @@ import org.jboss.resteasy.reactive.server.ServerExceptionMapper;
 import javax.xml.stream.XMLStreamConstants;
 import javax.xml.stream.XMLStreamException;
 import javax.xml.stream.XMLStreamReader;
-
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.Closeable;
@@ -788,10 +787,9 @@ public class S3Controller {
                    .elem("Size", obj.getSize())
                    .elem("StorageClass", obj.getStorageClass());
                 if (bucketOwnerAccount != null) {
-                    String objectOwnerAccount = !ownershipEnforced && obj.getOwnerAccountId() != null
-                            ? obj.getOwnerAccountId() : bucketOwnerAccount;
                     xml.start("Owner")
-                       .elem("ID", AwsCanonicalUserId.forAccount(objectOwnerAccount))
+                       .elem("ID", AwsCanonicalUserId.forAccount(S3Service.effectiveObjectOwnerAccount(
+                               obj, bucketOwnerAccount, ownershipEnforced)))
                        .elem("DisplayName", S3Service.DEFAULT_OWNER_DISPLAY_NAME)
                        .end("Owner");
                 }
