@@ -110,6 +110,58 @@ class SamTransformIntegrationTest {
     }
 
     @Test
+    void samAutoPublishAliasReferenceCreatesLambdaPermission() {
+        String stackName = "sam-ref-alias-" + Long.toString(System.nanoTime(), 36);
+        String functionName = stackName + "-fn";
+        stacksToDelete.add(stackName);
+
+        String template = """
+            Transform: AWS::Serverless-2016-10-31
+            Resources:
+              Fn:
+                Type: AWS::Serverless::Function
+                Properties:
+                  FunctionName: %s
+                  Runtime: nodejs22.x
+                  Handler: index.handler
+                  InlineCode: "exports.handler = async () => ({ ok: true });"
+                  AutoPublishAlias: live
+              FnPermission:
+                Type: AWS::Lambda::Permission
+                Properties:
+                  Action: lambda:InvokeFunction
+                  FunctionName: !Ref Fn.Alias
+                  Principal: events.amazonaws.com
+            Outputs:
+              AliasArn:
+                Value: !Ref Fn.Alias
+            """.formatted(functionName);
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "CreateStack")
+            .formParam("StackName", stackName)
+            .formParam("TemplateBody", template)
+            .formParam("Capabilities.member.1", "CAPABILITY_IAM")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        waitForStackStatus(stackName, "CREATE_COMPLETE");
+        String stackXml = given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "DescribeStacks")
+            .formParam("StackName", stackName)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .extract().asString();
+        assertThat(stackXml, containsString(":function:" + functionName + ":live"));
+    }
+
+    @Test
     @Tag("docker")
     void samFunction_withAutoPublishAlias_createsVersionAndAlias() throws Exception {
         String stackName = "sam-alias-stack";
