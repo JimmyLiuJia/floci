@@ -1,13 +1,20 @@
 package io.github.hectorvent.floci.services.ram;
 
+import io.github.hectorvent.floci.testing.AwsTestClients;
 import io.github.hectorvent.floci.testing.RestAssuredJsonUtils;
 import io.quarkus.test.junit.QuarkusTest;
 import io.restassured.response.Response;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import software.amazon.awssdk.regions.Region;
+import software.amazon.awssdk.services.ram.RamClient;
+import software.amazon.awssdk.services.ram.model.GetResourceSharesRequest;
+import software.amazon.awssdk.services.ram.model.GetResourceSharesResponse;
+import software.amazon.awssdk.services.ram.model.ResourceOwner;
 
 import java.util.List;
 import java.util.Set;
+import java.util.UUID;
 
 import static io.restassured.RestAssured.given;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -24,6 +31,33 @@ class RamGetResourceSharesPaginationIntegrationTest {
     @BeforeAll
     static void configureRestAssured() {
         RestAssuredJsonUtils.configureAwsContentTypes();
+    }
+
+    @Test
+    void sdkPaginatorReturnsEachMatchingShareExactlyOnce() {
+        String suffix = UUID.randomUUID().toString();
+        try (RamClient ram = AwsTestClients.create(RamClient.builder(), "777777777779", Region.US_EAST_1)) {
+            String firstArn = ram.createResourceShare(request -> request.name("pagination-sdk-first-" + suffix))
+                    .resourceShare().resourceShareArn();
+            String secondArn = ram.createResourceShare(request -> request.name("pagination-sdk-second-" + suffix))
+                    .resourceShare().resourceShareArn();
+            try {
+                GetResourceSharesRequest request = GetResourceSharesRequest.builder()
+                        .resourceOwner(ResourceOwner.SELF).resourceShareArns(firstArn, secondArn)
+                        .maxResults(1).build();
+                List<GetResourceSharesResponse> pages = ram.getResourceSharesPaginator(request).stream().toList();
+                assertEquals(2, pages.size());
+                assertEquals(1, pages.get(0).resourceShares().size());
+                assertEquals(1, pages.get(1).resourceShares().size());
+                List<String> returnedArns = pages.stream().flatMap(page -> page.resourceShares().stream())
+                        .map(share -> share.resourceShareArn()).toList();
+                assertEquals(2, returnedArns.size());
+                assertEquals(Set.of(firstArn, secondArn), Set.copyOf(returnedArns));
+            } finally {
+                ram.deleteResourceShare(request -> request.resourceShareArn(firstArn));
+                ram.deleteResourceShare(request -> request.resourceShareArn(secondArn));
+            }
+        }
     }
 
     @Test
