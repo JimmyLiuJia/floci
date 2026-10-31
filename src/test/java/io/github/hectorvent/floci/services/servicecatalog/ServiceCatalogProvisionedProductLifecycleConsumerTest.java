@@ -127,7 +127,6 @@ class ServiceCatalogProvisionedProductLifecycleConsumerTest {
         String artifactId = firstArtifactId(productId);
         String provisionedId = importProvisionedProduct(productId, artifactId, "ab-update-record-detail-pp");
 
-        Thread.sleep(25);
         Response updated = call("UpdateProvisionedProduct", "{\"ProvisionedProductId\":\"" + provisionedId
                 + "\",\"UpdateToken\":\"tok-update-record-detail\"}")
                 .then().statusCode(200).extract().response();
