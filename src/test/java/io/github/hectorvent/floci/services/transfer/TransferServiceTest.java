@@ -160,6 +160,84 @@ class TransferServiceTest {
     }
 
     @Test
+    void listActionsRejectUnknownNextTokens() {
+        Server server = service.createServer("us-east-1", null, null, null, null,
+                null, null, null, null, null);
+        service.createUser(server.getServerId(), "us-east-1", "alice", "role", null,
+                null, null, null);
+        ObjectMapper mapper = new ObjectMapper();
+        TransferHandler handler = new TransferHandler(service, mapper);
+
+        Response servers = handler.handle("ListServers",
+                mapper.createObjectNode().put("NextToken", "unknown-token"), "us-east-1");
+        Response users = handler.handle("ListUsers", mapper.createObjectNode()
+                .put("ServerId", server.getServerId()).put("NextToken", "unknown-token"), "us-east-1");
+
+        assertAll(
+                () -> assertEquals(400, servers.getStatus()),
+                () -> assertEquals("InvalidNextTokenException;Sender",
+                        servers.getHeaderString("x-amzn-query-error")),
+                () -> assertEquals(400, users.getStatus()),
+                () -> assertEquals("InvalidNextTokenException;Sender",
+                        users.getHeaderString("x-amzn-query-error")));
+    }
+
+    @Test
+    void listActionsRejectTokensFromOtherScopes() {
+        Server firstServer = service.createServer("us-east-1", null, null, null, null,
+                null, null, null, null, null);
+        Server secondServer = service.createServer("us-east-1", null, null, null, null,
+                null, null, null, null, null);
+        service.createUser(firstServer.getServerId(), "us-east-1", "alice", "role", null,
+                null, null, null);
+        service.createUser(firstServer.getServerId(), "us-east-1", "bob", "role", null,
+                null, null, null);
+        ObjectMapper mapper = new ObjectMapper();
+        TransferHandler handler = new TransferHandler(service, mapper);
+
+        String serverToken = ((JsonNode) handler.handle("ListServers",
+                mapper.createObjectNode().put("MaxResults", 1), "us-east-1").getEntity())
+                .path("NextToken").asText();
+        String userToken = ((JsonNode) handler.handle("ListUsers", mapper.createObjectNode()
+                .put("ServerId", firstServer.getServerId()).put("MaxResults", 1), "us-east-1")
+                .getEntity()).path("NextToken").asText();
+
+        Response serverTokenOnUsers = handler.handle("ListUsers", mapper.createObjectNode()
+                .put("ServerId", firstServer.getServerId()).put("NextToken", serverToken), "us-east-1");
+        Response userTokenOnOtherServer = handler.handle("ListUsers", mapper.createObjectNode()
+                .put("ServerId", secondServer.getServerId()).put("NextToken", userToken), "us-east-1");
+        Response alteredServerToken = handler.handle("ListServers", mapper.createObjectNode()
+                .put("NextToken", serverToken + "x"), "us-east-1");
+
+        assertAll(
+                () -> assertEquals(400, serverTokenOnUsers.getStatus()),
+                () -> assertEquals(400, userTokenOnOtherServer.getStatus()),
+                () -> assertEquals(400, alteredServerToken.getStatus()));
+    }
+
+    @Test
+    void listUsersTokenResumesAfterItsCursorIsDeleted() {
+        Server server = service.createServer("us-east-1", null, null, null, null,
+                null, null, null, null, null);
+        for (String name : List.of("alice", "bob", "carol")) {
+            service.createUser(server.getServerId(), "us-east-1", name, "role", null,
+                    null, null, null);
+        }
+        ObjectMapper mapper = new ObjectMapper();
+        TransferHandler handler = new TransferHandler(service, mapper);
+        ObjectNode request = mapper.createObjectNode().put("ServerId", server.getServerId())
+                .put("MaxResults", 1);
+        String token = ((JsonNode) handler.handle("ListUsers", request, "us-east-1").getEntity())
+                .path("NextToken").asText();
+        service.deleteUser(server.getServerId(), "alice");
+        request.put("NextToken", token);
+
+        JsonNode next = (JsonNode) handler.handle("ListUsers", request, "us-east-1").getEntity();
+        assertEquals("bob", next.path("Users").get(0).path("UserName").asText());
+        assertTrue(next.has("NextToken"));
+    }
+
+    @Test
     void failedTagWriteDoesNotLeaveCreatedServerBehind() {
         doThrow(new IllegalStateException("tag write failed"))
                 .when(tagStore).putForAccount(anyString(), anyString(), any());
@@ -185,7 +263,7 @@ class TransferServiceTest {
         User secondUser = service.createUser(second.getServerId(), "eu-west-1", "alice", "role", null,
                 null, null, null);
 
-        assertEquals(List.of(second.getServerId()), service.listServers(null, 100).stream()
+        assertEquals(List.of(second.getServerId()), service.listServers(null, 100).items().stream()
                 .map(Server::getServerId).toList());
         assertEquals(secondUser.getArn(), service.getUser(second.getServerId(), "alice").getArn());
         assertThrows(AwsException.class, () -> service.getServer(first.getServerId()));
@@ -263,8 +341,8 @@ class TransferServiceTest {
         user.setArn("arn:aws:transfer:us-east-1:111111111111:user/s-legacy/alice");
         userStore.putForAccount("111111111111", "s-legacy/alice", user);
 
-        assertEquals(1, service.listServers(null, 100).size());
-        assertEquals(1, service.listUsers("s-legacy", null, 100).size());
+        assertEquals(1, service.listServers(null, 100).items().size());
+        assertEquals(1, service.listUsers("s-legacy", null, 100).items().size());
         assertTrue(serverStore.getForAccount("111111111111", "s-legacy").isEmpty());
         assertTrue(userStore.getForAccount("111111111111", "s-legacy/alice").isEmpty());
         assertTrue(serverStore.getForAccount("111111111111", "us-east-1/s-legacy").isPresent());

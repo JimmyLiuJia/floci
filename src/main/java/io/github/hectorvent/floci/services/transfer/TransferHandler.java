@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.JsonErrorResponseUtils;
+import io.github.hectorvent.floci.core.common.PaginatedResult;
 import io.github.hectorvent.floci.services.transfer.model.HomeDirectoryMapping;
 import io.github.hectorvent.floci.services.transfer.model.Server;
 import io.github.hectorvent.floci.services.transfer.model.SshPublicKey;
@@ -99,17 +100,15 @@ public class TransferHandler {
         String nextToken = textOrNull(req, "NextToken");
         int maxResults = req.path("MaxResults").asInt(100);
         requirePageSize(maxResults);
-        List<Server> servers = service.listServers(nextToken, maxResults + 1);
-        boolean hasMore = servers.size() > maxResults;
-        List<Server> page = hasMore ? servers.subList(0, maxResults) : servers;
+        PaginatedResult<Server> page = service.listServers(nextToken, maxResults);
 
         ObjectNode resp = objectMapper.createObjectNode();
         ArrayNode arr = resp.putArray("Servers");
-        for (Server s : page) {
+        for (Server s : page.items()) {
             arr.add(buildServerListEntry(s));
         }
-        if (hasMore) {
-            resp.put("NextToken", page.get(page.size() - 1).getServerId());
+        if (page.nextToken() != null) {
+            resp.put("NextToken", page.nextToken());
         }
         return Response.ok(resp).build();
     }
@@ -189,18 +188,16 @@ public class TransferHandler {
         String nextToken = textOrNull(req, "NextToken");
         int maxResults = req.path("MaxResults").asInt(100);
         requirePageSize(maxResults);
-        List<User> users = service.listUsers(serverId, nextToken, maxResults + 1);
-        boolean hasMore = users.size() > maxResults;
-        List<User> page = hasMore ? users.subList(0, maxResults) : users;
+        PaginatedResult<User> page = service.listUsers(serverId, nextToken, maxResults);
 
         ObjectNode resp = objectMapper.createObjectNode();
         resp.put("ServerId", serverId);
         ArrayNode arr = resp.putArray("Users");
-        for (User u : page) {
+        for (User u : page.items()) {
             arr.add(buildUserListEntry(u));
         }
-        if (hasMore) {
-            resp.put("NextToken", page.get(page.size() - 1).getUserName());
+        if (page.nextToken() != null) {
+            resp.put("NextToken", page.nextToken());
         }
         return Response.ok(resp).build();
     }
