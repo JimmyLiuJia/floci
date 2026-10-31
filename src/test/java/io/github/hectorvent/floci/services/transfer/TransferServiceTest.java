@@ -1,6 +1,9 @@
 package io.github.hectorvent.floci.services.transfer;
 
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.github.hectorvent.floci.config.EmulatorConfig;
 import io.github.hectorvent.floci.core.common.AwsArnUtils;
 import io.github.hectorvent.floci.core.common.AwsException;
@@ -13,6 +16,7 @@ import io.github.hectorvent.floci.services.transfer.model.Server;
 import io.github.hectorvent.floci.services.transfer.model.SshPublicKey;
 import io.github.hectorvent.floci.services.transfer.model.User;
 import jakarta.enterprise.inject.Instance;
+import jakarta.ws.rs.core.Response;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
@@ -22,7 +26,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
+import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -80,6 +86,77 @@ class TransferServiceTest {
                 .thenAnswer(invocation -> AwsArnUtils.Arn.of(invocation.getArgument(0),
                         invocation.getArgument(1), requestContext.getAccountId(), invocation.getArgument(2)).toString());
         service = new TransferService(factory, null, regionResolver);
+    }
+
+    @Test
+    void exactFinalPagesDoNotReturnAnotherToken() {
+        Server server = service.createServer("us-east-1", null, null, null, null,
+                null, null, null, null, null);
+        service.createUser(server.getServerId(), "us-east-1", "alice", "role", null,
+                null, null, null);
+        ObjectMapper mapper = new ObjectMapper();
+        TransferHandler handler = new TransferHandler(service, mapper);
+        ObjectNode serverRequest = mapper.createObjectNode().put("MaxResults", 1);
+        Response serversResponse = handler.handle("ListServers", serverRequest, "us-east-1");
+        ObjectNode userRequest = mapper.createObjectNode().put("ServerId", server.getServerId())
+                .put("MaxResults", 1);
+        Response usersResponse = handler.handle("ListUsers", userRequest, "us-east-1");
+
+        JsonNode servers = (JsonNode) serversResponse.getEntity();
+        JsonNode users = (JsonNode) usersResponse.getEntity();
+        assertAll(
+                () -> assertEquals(1, servers.path("Servers").size()),
+                () -> assertFalse(servers.has("NextToken"), "ListServers has no remaining page"),
+                () -> assertEquals(1, users.path("Users").size()),
+                () -> assertFalse(users.has("NextToken"), "ListUsers has no remaining page"));
+    }
+
+    @Test
+    void listActionsReturnTokensOnlyWhileMoreItemsRemain() {
+        Server firstServer = service.createServer("us-east-1", null, null, null, null,
+                null, null, null, null, null);
+        service.createServer("us-east-1", null, null, null, null,
+                null, null, null, null, null);
+        service.createUser(firstServer.getServerId(), "us-east-1", "alice", "role", null,
+                null, null, null);
+        service.createUser(firstServer.getServerId(), "us-east-1", "bob", "role", null,
+                null, null, null);
+        ObjectMapper mapper = new ObjectMapper();
+        TransferHandler handler = new TransferHandler(service, mapper);
+
+        ObjectNode serverRequest = mapper.createObjectNode().put("MaxResults", 1);
+        JsonNode firstServers = (JsonNode) handler.handle("ListServers", serverRequest, "us-east-1").getEntity();
+        assertTrue(firstServers.has("NextToken"));
+        serverRequest.put("NextToken", firstServers.path("NextToken").asText());
+        JsonNode lastServers = (JsonNode) handler.handle("ListServers", serverRequest, "us-east-1").getEntity();
+
+        ObjectNode userRequest = mapper.createObjectNode().put("ServerId", firstServer.getServerId())
+                .put("MaxResults", 1);
+        JsonNode firstUsers = (JsonNode) handler.handle("ListUsers", userRequest, "us-east-1").getEntity();
+        assertTrue(firstUsers.has("NextToken"));
+        userRequest.put("NextToken", firstUsers.path("NextToken").asText());
+        JsonNode lastUsers = (JsonNode) handler.handle("ListUsers", userRequest, "us-east-1").getEntity();
+
+        assertAll(
+                () -> assertEquals(1, firstServers.path("Servers").size()),
+                () -> assertEquals(1, lastServers.path("Servers").size()),
+                () -> assertFalse(lastServers.has("NextToken")),
+                () -> assertEquals(1, firstUsers.path("Users").size()),
+                () -> assertEquals("alice", firstUsers.path("Users").get(0).path("UserName").asText()),
+                () -> assertEquals(1, lastUsers.path("Users").size()),
+                () -> assertEquals("bob", lastUsers.path("Users").get(0).path("UserName").asText()),
+                () -> assertFalse(lastUsers.has("NextToken")));
+    }
+
+    @Test
+    void listActionsRejectPageSizesOutsideAwsRange() {
+        ObjectMapper mapper = new ObjectMapper();
+        TransferHandler handler = new TransferHandler(service, mapper);
+        assertAll(
+                () -> assertEquals(400, handler.handle("ListServers",
+                        mapper.createObjectNode().put("MaxResults", 0), "us-east-1").getStatus()),
+                () -> assertEquals(400, handler.handle("ListUsers",
+                        mapper.createObjectNode().put("MaxResults", 1001), "us-east-1").getStatus()));
     }
 
     @Test
