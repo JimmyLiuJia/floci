@@ -1114,8 +1114,8 @@ class SamTransformProcessor {
 
     /**
      * Recursively merges {@code override} into {@code base}: when both sides hold an object for the
-     * same key, the objects are merged key-wise; lists are appended with base entries first;
-     * otherwise the override value replaces the base value.
+     * same key, plain objects are merged key-wise; lists are appended with base entries first;
+     * intrinsic function objects and scalar values are replaced by the override value.
      * {@code base} is mutated and returned.
      */
     private ObjectNode deepMerge(ObjectNode base, ObjectNode override) {
@@ -1123,7 +1123,8 @@ class SamTransformProcessor {
             String key = entry.getKey();
             JsonNode overrideValue = entry.getValue();
             JsonNode baseValue = base.get(key);
-            if (baseValue != null && baseValue.isObject() && overrideValue.isObject()) {
+            if (baseValue != null && baseValue.isObject() && overrideValue.isObject()
+                    && !isIntrinsicObject(baseValue) && !isIntrinsicObject(overrideValue)) {
                 base.set(key, deepMerge((ObjectNode) baseValue, (ObjectNode) overrideValue));
             } else if (baseValue instanceof ArrayNode baseArray && overrideValue.isArray()) {
                 baseArray.addAll((ArrayNode) overrideValue.deepCopy());
@@ -1132,6 +1133,14 @@ class SamTransformProcessor {
             }
         });
         return base;
+    }
+
+    private static boolean isIntrinsicObject(JsonNode value) {
+        if (!value.isObject() || value.size() != 1) {
+            return false;
+        }
+        String key = value.fieldNames().next();
+        return key.equals("Ref") || key.startsWith("Fn::");
     }
 
     private String expandServerlessFunction(String logicalId, JsonNode properties, JsonNode source,

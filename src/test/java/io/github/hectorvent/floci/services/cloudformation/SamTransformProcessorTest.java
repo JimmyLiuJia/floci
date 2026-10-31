@@ -2181,6 +2181,50 @@ class SamTransformProcessorTest {
     }
 
     @Test
+    void expandSamTemplate_replacesIntrinsicValuesWithinGlobalsMaps() throws Exception {
+        JsonNode template = objectMapper.readTree("""
+            {
+              "Transform": "AWS::Serverless-2016-10-31",
+              "Globals": {"Function": {"Environment": {"Variables": {
+                "GLOBAL": "global",
+                "URL": {"Fn::Join": ["", ["https://global.example", "/old"]]},
+                "SCALAR": {"Fn::Sub": "global-${AWS::Region}"},
+                "REFERENCE": {"Ref": "GlobalParam"}
+              }}}},
+              "Resources": {"MyFunc": {
+                "Type": "AWS::Serverless::Function",
+                "Properties": {
+                  "Runtime": "nodejs20.x",
+                  "Handler": "index.handler",
+                  "InlineCode": "exports.handler = async () => ({});",
+                  "Environment": {"Variables": {
+                    "LOCAL": "local",
+                    "URL": {"Fn::Join": ["", ["https://local.example", "/v1"]]},
+                    "SCALAR": {"Fn::Base64": "local"},
+                    "REFERENCE": {"Fn::Sub": "local-${AWS::Region}"}
+                  }}
+                }
+              }}
+            }
+            """);
+
+        JsonNode variables = processor.expandSamTemplate(template)
+                .path("Resources").path("MyFunc").path("Properties")
+                .path("Environment").path("Variables");
+        assertEquals("global", variables.path("GLOBAL").asText());
+        assertEquals("local", variables.path("LOCAL").asText());
+        assertEquals(objectMapper.readTree("""
+                {"Fn::Join": ["", ["https://local.example", "/v1"]]}
+                """), variables.path("URL"));
+        assertEquals(objectMapper.readTree("""
+                {"Fn::Base64": "local"}
+                """), variables.path("SCALAR"));
+        assertEquals(objectMapper.readTree("""
+                {"Fn::Sub": "local-${AWS::Region}"}
+                """), variables.path("REFERENCE"));
+    }
+
+    @Test
     void expandSamTemplate_stripsGlobalsWhenResourcesAbsent() throws Exception {
         // SAM-only Globals must be stripped even on the early return (no/!object Resources)
         JsonNode template = objectMapper.readTree("""
