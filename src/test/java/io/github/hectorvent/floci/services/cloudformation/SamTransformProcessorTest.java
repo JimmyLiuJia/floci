@@ -2120,6 +2120,33 @@ class SamTransformProcessorTest {
     }
 
     @Test
+    void expandSamTemplate_prependsGlobalFunctionLayers() throws Exception {
+        JsonNode template = objectMapper.readTree("""
+            {
+              "Transform": "AWS::Serverless-2016-10-31",
+              "Globals": {"Function": {"Layers": ["arn:aws:lambda:us-east-1:123456789012:layer:shared:1"]}},
+              "Resources": {
+                "MyFunc": {
+                  "Type": "AWS::Serverless::Function",
+                  "Properties": {
+                    "Runtime": "nodejs20.x",
+                    "Handler": "index.handler",
+                    "InlineCode": "exports.handler = async () => ({});",
+                    "Layers": ["arn:aws:lambda:us-east-1:123456789012:layer:local:1"]
+                  }
+                }
+              }
+            }
+            """);
+
+        JsonNode layers = processor.expandSamTemplate(template)
+                .path("Resources").path("MyFunc").path("Properties").path("Layers");
+        assertEquals(2, layers.size());
+        assertEquals("arn:aws:lambda:us-east-1:123456789012:layer:shared:1", layers.get(0).asText());
+        assertEquals("arn:aws:lambda:us-east-1:123456789012:layer:local:1", layers.get(1).asText());
+    }
+
+    @Test
     void expandSamTemplate_mergesNestedMapsFromGlobals() throws Exception {
         // Environment.Variables must merge key-wise: globals-only keys preserved, function keys win on clash
         JsonNode template = objectMapper.readTree("""

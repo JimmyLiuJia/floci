@@ -1099,8 +1099,7 @@ class SamTransformProcessor {
      *
      * <p>Nested objects (e.g. {@code Environment.Variables}, {@code Tags}) are merged key-wise, so a
      * resource only overrides the individual keys it sets and global entries are preserved — matching
-     * SAM's map-merge behavior. Scalar and array-valued properties (e.g. {@code Policies},
-     * {@code Layers}) are overridden wholesale; SAM's additive list-append for those is not implemented.
+     * SAM's map-merge behavior. Lists are appended with global entries first; scalar values are overridden.
      */
     private JsonNode mergeGlobals(JsonNode globals, String section, JsonNode properties) {
         JsonNode sectionGlobals = globals.path(section);
@@ -1115,7 +1114,8 @@ class SamTransformProcessor {
 
     /**
      * Recursively merges {@code override} into {@code base}: when both sides hold an object for the
-     * same key, the objects are merged key-wise; otherwise the override value replaces the base value.
+     * same key, the objects are merged key-wise; lists are appended with base entries first;
+     * otherwise the override value replaces the base value.
      * {@code base} is mutated and returned.
      */
     private ObjectNode deepMerge(ObjectNode base, ObjectNode override) {
@@ -1125,6 +1125,8 @@ class SamTransformProcessor {
             JsonNode baseValue = base.get(key);
             if (baseValue != null && baseValue.isObject() && overrideValue.isObject()) {
                 base.set(key, deepMerge((ObjectNode) baseValue, (ObjectNode) overrideValue));
+            } else if (baseValue instanceof ArrayNode baseArray && overrideValue.isArray()) {
+                baseArray.addAll((ArrayNode) overrideValue.deepCopy());
             } else {
                 base.set(key, overrideValue.deepCopy());
             }
