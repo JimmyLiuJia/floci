@@ -2147,6 +2147,40 @@ class SamTransformProcessorTest {
     }
 
     @Test
+    void expandSamTemplate_functionArchitecturesReplaceGlobals() throws Exception {
+        JsonNode template = objectMapper.readTree("""
+            {
+              "Transform": "AWS::Serverless-2016-10-31",
+              "Globals": {"Function": {"Architectures": ["x86_64"]}},
+              "Resources": {"MyFunc": {
+                "Type": "AWS::Serverless::Function",
+                "Properties": {
+                  "Runtime": "nodejs20.x",
+                  "Handler": "index.handler",
+                  "InlineCode": "exports.handler = async () => ({});",
+                  "Architectures": ["arm64"]
+                }
+              }, "InheritedFunc": {
+                "Type": "AWS::Serverless::Function",
+                "Properties": {
+                  "Runtime": "nodejs20.x",
+                  "Handler": "index.handler",
+                  "InlineCode": "exports.handler = async () => ({});"
+                }
+              }}
+            }
+            """);
+
+        JsonNode expanded = processor.expandSamTemplate(template);
+        JsonNode architectures = expanded
+                .path("Resources").path("MyFunc").path("Properties").path("Architectures");
+        assertEquals(objectMapper.readTree("[\"arm64\"]"), architectures);
+        JsonNode inheritedArchitectures = expanded
+                .path("Resources").path("InheritedFunc").path("Properties").path("Architectures");
+        assertEquals(objectMapper.readTree("[\"x86_64\"]"), inheritedArchitectures);
+    }
+
+    @Test
     void expandSamTemplate_mergesNestedMapsFromGlobals() throws Exception {
         // Environment.Variables must merge key-wise: globals-only keys preserved, function keys win on clash
         JsonNode template = objectMapper.readTree("""

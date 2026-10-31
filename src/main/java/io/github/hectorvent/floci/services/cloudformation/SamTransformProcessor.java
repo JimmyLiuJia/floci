@@ -1099,7 +1099,8 @@ class SamTransformProcessor {
      *
      * <p>Nested objects (e.g. {@code Environment.Variables}, {@code Tags}) are merged key-wise, so a
      * resource only overrides the individual keys it sets and global entries are preserved — matching
-     * SAM's map-merge behavior. Lists are appended with global entries first; scalar values are overridden.
+     * SAM's map-merge behavior. Lists append global entries first, except
+     * {@code Function.Architectures}, which the resource replaces; scalars are overridden.
      */
     private JsonNode mergeGlobals(JsonNode globals, String section, JsonNode properties) {
         JsonNode sectionGlobals = globals.path(section);
@@ -1109,7 +1110,11 @@ class SamTransformProcessor {
         if (!properties.isObject()) {
             return sectionGlobals.deepCopy();
         }
-        return deepMerge((ObjectNode) sectionGlobals.deepCopy(), (ObjectNode) properties);
+        ObjectNode merged = (ObjectNode) sectionGlobals.deepCopy();
+        if ("Function".equals(section) && properties.has("Architectures")) {
+            merged.remove("Architectures");
+        }
+        return deepMerge(merged, (ObjectNode) properties);
     }
 
     /**
